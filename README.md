@@ -1,12 +1,12 @@
-# Silo TMDB Plugin
+# Prairie TMDB Plugin
 
-First-party Silo metadata plugin backed by TMDB.
+First-party Prairie metadata plugin backed by TMDB.
 
 ## Dependency Model
 
-This repository consumes `github.com/Silo-Server/silo-plugin-sdk` as a normal Go module dependency. CI and release builds run with `GOWORK=off` and expect the SDK version in `go.mod` to resolve from a published semver tag.
+This repository consumes `github.com/prairie-server/prairie-plugin-sdk` as a normal Go module dependency. CI and release builds run with `GOWORK=off` and expect the SDK version in `go.mod` to resolve from a published semver tag.
 
-For local multi-repo development, use a temporary `replace` or a local `go.work` that points at `dev/github/silo-plugin-sdk`. Do not commit machine-local filesystem replaces as the supported release path.
+For local multi-repo development, use a temporary `replace` or a local `go.work` that points at `dev/github/prairie-plugin-sdk`. Do not commit machine-local filesystem replaces as the supported release path.
 
 ## Development
 
@@ -25,4 +25,4 @@ This product uses the TMDB API but is not endorsed or certified by TMDB. All met
 
 ## License
 
-`silo-plugin-metadata-tmdb` is licensed under `AGPL-3.0-or-later`. See [LICENSE](LICENSE).
+`prairie-plugin-metadata-tmdb` is licensed under `AGPL-3.0-or-later`. See [LICENSE](LICENSE).

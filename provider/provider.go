@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Silo-Server/silo-plugin-tmdb/metadata"
-	"github.com/Silo-Server/silo-plugin-tmdb/models"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/models"
 )
 
 const defaultTMDBLanguage = "en-US"
@@ -33,8 +33,8 @@ func normalizeTMDBLanguageTag(lang string) string {
 	return strings.Join(parts, "-")
 }
 
-// tmdbLanguage converts a Silo host language into a TMDB API language
-// parameter. Silo sends ISO 639-1 codes; TMDB prefers region-qualified
+// tmdbLanguage converts a Prairie host language into a TMDB API language
+// parameter. Prairie sends ISO 639-1 codes; TMDB prefers region-qualified
 // English, so English is normalized to en-US while other languages pass
 // through in normalized form.
 func tmdbLanguage(lang string) string {
