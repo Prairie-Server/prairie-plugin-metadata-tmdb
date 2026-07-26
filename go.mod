@@ -1,4 +1,4 @@
-module github.com/Silo-Server/silo-plugin-tmdb
+module github.com/prairie-server/prairie-plugin-metadata-tmdb
 
 go 1.26.0
 
@@ -10,7 +10,6 @@ require (
 require google.golang.org/grpc v1.75.1 // indirect
 
 require (
-	github.com/Silo-Server/silo-plugin-sdk v0.12.0
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
@@ -19,6 +18,7 @@ require (
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/oklog/run v1.1.0 // indirect
+	github.com/prairie-server/prairie-plugin-sdk v0.12.1-0.20260726223239-3c6de05cade7
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.32.0 // indirect

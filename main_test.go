@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"testing"
 
-	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
-	"github.com/Silo-Server/silo-plugin-tmdb/provider"
+	pluginv1 "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/provider"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 

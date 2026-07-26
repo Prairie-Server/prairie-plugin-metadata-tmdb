@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Silo-Server/silo-plugin-tmdb/metadata"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
 )
 
 func TestTMDBLanguage(t *testing.T) {

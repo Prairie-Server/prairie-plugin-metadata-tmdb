@@ -3,7 +3,7 @@ package metadata
 import (
 	"strings"
 
-	"github.com/Silo-Server/silo-plugin-tmdb/models"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/models"
 )
 
 // SearchQuery is passed to SearchProvider.Search().
