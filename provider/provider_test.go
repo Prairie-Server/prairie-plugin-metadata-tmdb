@@ -1430,3 +1430,31 @@ func TestHelperEdgeBranches(t *testing.T) {
 		t.Fatal("expected empty movie rating without certification")
 	}
 }
+
+func TestProviderSetAPIKey(t *testing.T) {
+	t.Parallel()
+
+	var nilProvider *Provider
+	nilProvider.SetAPIKey("ignored")
+
+	providerWithoutClient := &Provider{}
+	providerWithoutClient.SetAPIKey("ignored")
+
+	c := NewClient("", 1000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("api_key"); got != "provider-key" {
+			t.Fatalf("api_key = %q, want provider-key", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	t.Cleanup(server.Close)
+	c.SetBaseURL(server.URL)
+
+	p := &Provider{client: c}
+	p.SetAPIKey("provider-key")
+
+	var dest map[string]any
+	if err := c.doGet(context.Background(), "/provider-key", &dest); err != nil {
+		t.Fatalf("doGet error = %v", err)
+	}
+}

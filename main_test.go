@@ -35,6 +35,83 @@ func TestRuntimeServerConfigure_NoOp(t *testing.T) {
 	}
 }
 
+func TestRuntimeServerConfigure_CreatesProvider(t *testing.T) {
+	server := &runtimeServer{}
+
+	_, err := server.Configure(context.Background(), &pluginv1.ConfigureRequest{})
+	if err != nil {
+		t.Fatalf("Configure() returned error: %v", err)
+	}
+	if server.provider == nil {
+		t.Fatal("expected provider to be created")
+	}
+}
+
+func TestRuntimeServerConfigure_APIKey(t *testing.T) {
+	client := provider.NewClient("", 1000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if got := r.URL.Query().Get("api_key"); got != "configured-secret" {
+			t.Fatalf("api_key = %q, want configured-secret", got)
+		}
+		switch r.URL.Path {
+		case "/configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"},
+			})
+		case "/search/movie":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client.SetBaseURL(server.URL)
+
+	rs := &runtimeServer{provider: provider.NewProviderWithClient(client)}
+
+	_, err := rs.Configure(context.Background(), &pluginv1.ConfigureRequest{
+		Config: []*pluginv1.ConfigEntry{
+			nil,
+			{Key: "other_setting", Value: mustStruct(t, map[string]any{"value": "ignored"})},
+			{Key: "api_key", Value: mustStruct(t, map[string]any{"value": ""})},
+			{Key: " api_key ", Value: mustStruct(t, map[string]any{"value": "configured-secret"})},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Configure() returned error: %v", err)
+	}
+
+	ms := &metadataServer{runtime: rs}
+	if _, err := ms.Search(context.Background(), &pluginv1.SearchMetadataRequest{
+		Query:    "test",
+		ItemType: "movie",
+	}); err != nil {
+		t.Fatalf("Search() after Configure error = %v", err)
+	}
+}
+
+func TestConfigEntryString(t *testing.T) {
+	if got := configEntryString(nil); got != "" {
+		t.Fatalf("nil value = %q, want empty", got)
+	}
+	if got := configEntryString(mustStruct(t, map[string]any{"value": "secret"})); got != "secret" {
+		t.Fatalf("value field = %q, want secret", got)
+	}
+	if got := configEntryString(mustStruct(t, map[string]any{"string": "from-string"})); got != "from-string" {
+		t.Fatalf("string field = %q, want from-string", got)
+	}
+	if got := configEntryString(mustStruct(t, map[string]any{"text": "from-text"})); got != "from-text" {
+		t.Fatalf("text field = %q, want from-text", got)
+	}
+	if got := configEntryString(mustStruct(t, map[string]any{"custom": "fallback"})); got != "fallback" {
+		t.Fatalf("fallback field = %q, want fallback", got)
+	}
+	if got := configEntryString(mustStruct(t, map[string]any{"value": "  trimmed  "})); got != "trimmed" {
+		t.Fatalf("trimmed value = %q, want trimmed", got)
+	}
+}
+
 func mustStruct(t *testing.T, value map[string]any) *structpb.Struct {
 	t.Helper()
 
