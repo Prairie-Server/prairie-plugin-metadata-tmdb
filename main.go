@@ -49,7 +49,21 @@ func (s *runtimeServer) GetManifest(context.Context, *pluginv1.GetManifestReques
 	return &pluginv1.GetManifestResponse{Manifest: s.manifest}, nil
 }
 
-func (s *runtimeServer) Configure(_ context.Context, _ *pluginv1.ConfigureRequest) (*pluginv1.ConfigureResponse, error) {
+func (s *runtimeServer) Configure(_ context.Context, req *pluginv1.ConfigureRequest) (*pluginv1.ConfigureResponse, error) {
+	if s.provider == nil {
+		s.provider = provider.NewProvider()
+	}
+	for _, entry := range req.GetConfig() {
+		if entry == nil {
+			continue
+		}
+		if strings.TrimSpace(entry.GetKey()) != "api_key" {
+			continue
+		}
+		if key := configEntryString(entry.GetValue()); key != "" {
+			s.provider.SetAPIKey(key)
+		}
+	}
 	return &pluginv1.ConfigureResponse{}, nil
 }
 
@@ -544,6 +558,24 @@ func stringStruct(value map[string]string) (*structpb.Struct, error) {
 		return nil, nil
 	}
 	return structpb.NewStruct(converted)
+}
+
+func configEntryString(value *structpb.Struct) string {
+	if value == nil {
+		return ""
+	}
+	fields := value.GetFields()
+	for _, key := range []string{"value", "string", "text"} {
+		if raw := fields[key]; raw != nil {
+			return strings.TrimSpace(raw.GetStringValue())
+		}
+	}
+	for _, raw := range fields {
+		if text := strings.TrimSpace(raw.GetStringValue()); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func structFromMap(value map[string]any) *structpb.Struct {

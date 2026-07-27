@@ -109,7 +109,7 @@ func TestResolveImageURL(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			client := provider.NewClient(1000)
+			client := provider.NewClient("test-key", 1000)
 			client.SetBaseURL(server.URL)
 			p := provider.NewProviderWithClient(client)
 
@@ -150,7 +150,7 @@ func TestResolveImageURL_RetriesConfigurationAfterCanceledContext(t *testing.T) 
 	}))
 	t.Cleanup(server.Close)
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -228,7 +228,7 @@ func TestMetadataServerGetMetadata_IncludesReleaseDate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -361,7 +361,7 @@ func TestMetadataServerGetPersonDetail_CanonicalizesProfilePath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -515,7 +515,7 @@ func TestMetadataServerSearchSeasonsEpisodesImages(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 	ms := &metadataServer{runtime: &runtimeServer{provider: provider.NewProviderWithClient(client)}}
 
@@ -670,7 +670,7 @@ func TestResolveImageURLConfigurationError(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 	ms := &metadataServer{runtime: &runtimeServer{provider: provider.NewProviderWithClient(client)}}
 	if _, err := ms.ResolveImageURL(context.Background(), &pluginv1.ResolveImageURLRequest{Path: "tmdb://poster/x.jpg"}); err == nil {
@@ -697,7 +697,7 @@ func TestMetadataServerPropagatesProviderErrors(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 	ms := &metadataServer{runtime: &runtimeServer{provider: provider.NewProviderWithClient(client)}}
 
