@@ -9,10 +9,11 @@ import (
 	"testing"
 
 	pluginv1 "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
+	"google.golang.org/protobuf/types/known/structpb"
+
 	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
 	"github.com/prairie-server/prairie-plugin-metadata-tmdb/models"
 	"github.com/prairie-server/prairie-plugin-metadata-tmdb/provider"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestRuntimeServerConfigure_NoOp(t *testing.T) {
@@ -436,11 +437,11 @@ func TestMetadataServerSearchSeasonsEpisodesImages(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": 77, "name": "Show", "original_name": "Show", "original_language": "en",
 				"status": "Ended", "overview": "ov", "genres": []any{}, "networks": []any{},
-				"credits": map[string]any{"cast": []any{}, "crew": []any{}},
+				"credits":      map[string]any{"cast": []any{}, "crew": []any{}},
 				"external_ids": map[string]any{}, "images": map[string]any{
-					"posters": []map[string]any{{"file_path": "/poster.jpg", "width": 1, "height": 2, "vote_average": 5}},
+					"posters":   []map[string]any{{"file_path": "/poster.jpg", "width": 1, "height": 2, "vote_average": 5}},
 					"backdrops": []map[string]any{{"file_path": "/bd.jpg", "width": 3, "height": 4, "vote_average": 4}},
-					"logos": []map[string]any{{"file_path": "/logo.png", "width": 5, "height": 6, "vote_average": 3}},
+					"logos":     []map[string]any{{"file_path": "/logo.png", "width": 5, "height": 6, "vote_average": 3}},
 				},
 				"content_ratings": map[string]any{"results": []any{}},
 				"seasons": []map[string]any{{
@@ -545,8 +546,8 @@ func TestHelpersAliasesPeopleRatingsMetadataStruct(t *testing.T) {
 		t.Fatalf("people = %#v", people)
 	}
 
-	if ratingsMap(metadata.Ratings{}) != nil && len(ratingsMap(metadata.Ratings{})) != 0 {
-		// ok empty map
+	if empty := ratingsMap(metadata.Ratings{}); len(empty) != 0 {
+		t.Fatalf("empty ratingsMap = %#v", empty)
 	}
 	m := ratingsMap(metadata.Ratings{IMDB: 1, TMDB: 2, RTCritic: 3, RTAudience: 4})
 	if len(m) != 4 {
@@ -595,10 +596,12 @@ func TestGetMetadataNilResult(t *testing.T) {
 	resp, err := ms.GetMetadata(context.Background(), &pluginv1.GetMetadataRequest{
 		ProviderId: "", ItemType: "movie",
 	})
-	if err != nil || resp != nil && resp.GetItem() != nil {
-		// GetMetadata returns nil, nil when result is nil
+	if err != nil {
+		t.Fatalf("GetMetadata err=%v", err)
 	}
-	_ = resp
+	if resp != nil && resp.GetItem() != nil {
+		t.Fatalf("expected nil item, got %#v", resp.GetItem())
+	}
 }
 
 func TestStructFromMapPanicsOnInvalidValue(t *testing.T) {
