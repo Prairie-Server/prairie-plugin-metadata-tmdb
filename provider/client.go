@@ -17,7 +17,6 @@ import (
 
 const (
 	defaultBaseURL  = "https://api.themoviedb.org/3"
-	defaultAPIKey   = "9c18082d4985d4a204bc88af823a6353"
 	maxRetries      = 3
 	maxResponseBody = 1 << 20 // 1 MB
 )
@@ -26,6 +25,7 @@ const (
 type Client struct {
 	httpClient *http.Client
 	apiKey     string
+	apiKeyMu   sync.RWMutex
 	baseURL    string
 	imageBase  string // cached from /configuration
 	limiter    *rate.Limiter
@@ -33,14 +33,26 @@ type Client struct {
 }
 
 // NewClient creates a TMDB API client with the given rate limit (requests per
-// second). It uses the built-in project API key.
-func NewClient(rateLimit int) *Client {
+// second) and apiKey.
+//
+// If apiKey is empty, requests fail with a clear "missing API key" error.
+func NewClient(apiKey string, rateLimit int) *Client {
+	if rateLimit <= 0 {
+		rateLimit = 50
+	}
 	return &Client{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
-		apiKey:     defaultAPIKey,
+		apiKey:     apiKey,
 		baseURL:    defaultBaseURL,
 		limiter:    rate.NewLimiter(rate.Limit(rateLimit), rateLimit),
 	}
+}
+
+// SetAPIKey updates the TMDB API key used by requests.
+func (c *Client) SetAPIKey(key string) {
+	c.apiKeyMu.Lock()
+	c.apiKey = key
+	c.apiKeyMu.Unlock()
 }
 
 // SetBaseURL overrides the API base URL. Used for testing.
@@ -87,12 +99,19 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 		return err
 	}
 
+	c.apiKeyMu.RLock()
+	apiKey := strings.TrimSpace(c.apiKey)
+	c.apiKeyMu.RUnlock()
+	if apiKey == "" {
+		return fmt.Errorf("tmdb: missing API key (configure TMDB_API_KEY or api_key)")
+	}
+
 	// Append api_key query parameter for TMDB v3 authentication.
 	sep := "?"
 	if strings.Contains(path, "?") {
 		sep = "&"
 	}
-	reqURL := c.baseURL + path + sep + "api_key=" + url.QueryEscape(c.apiKey)
+	reqURL := c.baseURL + path + sep + "api_key=" + url.QueryEscape(apiKey)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)

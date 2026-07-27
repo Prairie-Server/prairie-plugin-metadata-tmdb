@@ -7,7 +7,7 @@
     "display_name": "TMDB Metadata",
     "summary": "Fetch movie and TV metadata and artwork from The Movie Database.",
     "description_markdown": "Provides metadata for movies, series, seasons, and episodes, plus image resolution for TMDB artwork stored by Prairie. It is a general-purpose first-party provider for movie and television libraries.",
-    "setup_markdown": "TMDB Metadata is installed as a default Prairie plugin. Add or enable **TMDB** in a library's metadata provider chain; no plugin-specific configuration is required.",
+    "setup_markdown": "TMDB Metadata is installed as a default Prairie plugin. Add or enable **TMDB** in a library's metadata provider chain.\n\nOperators must configure a TMDB API key from https://www.themoviedb.org/settings/api in the plugin's global configuration.",
     "homepage_url": "https://www.themoviedb.org",
     "source_url": "https://github.com/prairie-server/prairie-plugin-metadata-tmdb",
     "support_url": "https://github.com/prairie-server/prairie-plugin-metadata-tmdb/issues",
@@ -58,5 +58,23 @@
       }
     }
   ],
-  "global_config_schema": []
+  "global_config_schema": [
+    {
+      "key": "api_key",
+      "title": "TMDB API key",
+      "description": "TMDB API key used to authenticate requests.",
+      "required": true,
+      "json_schema": "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+      "admin_form": {
+        "fields": [
+          {
+            "key": "value",
+            "label": "API key",
+            "control": "ADMIN_FORM_CONTROL_PASSWORD",
+            "secret": true
+          }
+        ]
+      }
+    }
+  ]
 }

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -130,7 +131,8 @@ type Provider struct {
 
 // NewProvider creates a TMDB provider using the built-in project API key.
 func NewProvider() *Provider {
-	return &Provider{client: NewClient(40)}
+	apiKey := strings.TrimSpace(os.Getenv("TMDB_API_KEY"))
+	return &Provider{client: NewClient(apiKey, 40)}
 }
 
 // NewProviderWithClient creates a TMDB provider with a pre-configured client.
@@ -141,6 +143,14 @@ func NewProviderWithClient(c *Client) *Provider {
 func (p *Provider) Slug() string       { return "tmdb" }
 func (p *Provider) Name() string       { return "The Movie Database" }
 func (p *Provider) ForTypes() []string { return []string{"movie", "series"} }
+
+// SetAPIKey updates the TMDB API key used by the provider's client.
+func (p *Provider) SetAPIKey(key string) {
+	if p == nil || p.client == nil {
+		return
+	}
+	p.client.SetAPIKey(key)
+}
 
 // ---------------------------------------------------------------------------
 // SearchProvider

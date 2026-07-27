@@ -12,7 +12,7 @@ import (
 
 func TestClientImageURL(t *testing.T) {
 	t.Parallel()
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.imageBase = "https://image.tmdb.org/t/p/"
 	if got := c.ImageURL("", "w500"); got != "" {
 		t.Fatalf("empty path = %q", got)
@@ -34,7 +34,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 			})
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		var dest map[string]any
 		err := c.doGet(context.Background(), "/missing", &dest)
@@ -50,7 +50,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 			_, _ = w.Write([]byte("not-json"))
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		var dest map[string]any
 		if err := c.doGet(context.Background(), "/bad", &dest); err == nil {
@@ -65,7 +65,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 			_, _ = w.Write([]byte("{"))
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		var dest map[string]any
 		if err := c.doGet(context.Background(), "/bad-json", &dest); err == nil {
@@ -87,7 +87,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		var dest map[string]any
 		start := time.Now()
@@ -106,7 +106,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
@@ -122,7 +122,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 			w.WriteHeader(http.StatusBadGateway)
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
@@ -144,7 +144,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		var dest map[string]any
 		if err := c.doGet(context.Background(), "/x?page=2", &dest); err != nil {
@@ -154,7 +154,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 
 	t.Run("invalid request url", func(t *testing.T) {
 		t.Parallel()
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL("http://example.com/%zz")
 		var dest map[string]any
 		if err := c.doGet(context.Background(), "", &dest); err == nil {
@@ -167,7 +167,7 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		url := server.URL
 		server.Close()
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.httpClient.Timeout = 50 * time.Millisecond
 		c.SetBaseURL(url)
 		var dest map[string]any
@@ -184,7 +184,7 @@ func TestClientEndpointErrorReturns(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 
 	if _, err := c.SearchMovie(context.Background(), "x", 0, "en-US"); err == nil {
@@ -215,7 +215,7 @@ func TestClientCollectionAndTrendingErrorBranches(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 
 	if _, err := c.GetTrending(context.Background(), "movie", "day", 5); err == nil {
@@ -252,7 +252,7 @@ func TestClientCollectionPresetOversizedFirstPageIsTrimmed(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 	results, err := c.GetCollectionPreset(context.Background(), "popular", "movie", "", 2)
 	if err != nil {
@@ -293,7 +293,7 @@ func TestClientGetTrending(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 
 	if _, err := c.GetTrending(context.Background(), "invalid", "day", 10); err == nil {
@@ -369,7 +369,7 @@ func TestClientGetCollectionPreset(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 
 	if _, err := c.GetCollectionPreset(context.Background(), "nope", "movie", "", 5); err == nil {
@@ -456,7 +456,7 @@ func TestClientSearchTV(t *testing.T) {
 		})
 	}))
 	t.Cleanup(server.Close)
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 	results, err := c.SearchTV(context.Background(), "Series", 2001, "en-US")
 	if err != nil {
@@ -482,7 +482,7 @@ func TestClientRetryAfterInvalidHeaderAnd5xxSuccess(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		var dest map[string]any
 		if err := c.doGet(context.Background(), "/r", &dest); err != nil {
@@ -501,7 +501,7 @@ func TestClientRetryAfterInvalidHeaderAnd5xxSuccess(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		}))
 		t.Cleanup(server.Close)
-		c := NewClient(1000)
+		c := NewClient("test-key", 1000)
 		c.SetBaseURL(server.URL)
 		var dest map[string]any
 		if err := c.doGet(context.Background(), "/5", &dest); err != nil {
@@ -538,7 +538,7 @@ func TestClientGetCollectionPresetPaginationAndUpcoming(t *testing.T) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 	all, err := c.GetCollectionPreset(context.Background(), "upcoming", "movie", "", 1000)
 	if err != nil || len(all) != 3 {
@@ -562,7 +562,7 @@ func TestClientLoadConfigurationCached(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://img/"}})
 	}))
 	t.Cleanup(server.Close)
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 	if err := c.loadConfiguration(context.Background()); err != nil {
 		t.Fatal(err)
@@ -577,7 +577,7 @@ func TestClientLoadConfigurationCached(t *testing.T) {
 
 func TestClientDoGetCanceledBeforeRequest(t *testing.T) {
 	t.Parallel()
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL("http://127.0.0.1:1")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -596,7 +596,7 @@ func TestClientSearchMovieWithoutYear(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
 	}))
 	t.Cleanup(server.Close)
-	c := NewClient(1000)
+	c := NewClient("test-key", 1000)
 	c.SetBaseURL(server.URL)
 	if _, err := c.SearchMovie(context.Background(), "x", 0, "en-US"); err != nil {
 		t.Fatal(err)
