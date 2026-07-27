@@ -151,6 +151,116 @@ func TestClientDoGetErrorPaths(t *testing.T) {
 			t.Fatalf("doGet error = %v", err)
 		}
 	})
+
+	t.Run("invalid request url", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(1000)
+		c.SetBaseURL("http://example.com/%zz")
+		var dest map[string]any
+		if err := c.doGet(context.Background(), "", &dest); err == nil {
+			t.Fatal("expected request creation error")
+		}
+	})
+
+	t.Run("request failure", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		url := server.URL
+		server.Close()
+		c := NewClient(1000)
+		c.httpClient.Timeout = 50 * time.Millisecond
+		c.SetBaseURL(url)
+		var dest map[string]any
+		if err := c.doGet(context.Background(), "/down", &dest); err == nil {
+			t.Fatal("expected request failure")
+		}
+	})
+}
+
+func TestClientEndpointErrorReturns(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+
+	c := NewClient(1000)
+	c.SetBaseURL(server.URL)
+
+	if _, err := c.SearchMovie(context.Background(), "x", 0, "en-US"); err == nil {
+		t.Fatal("expected SearchMovie error")
+	}
+	if _, err := c.SearchTV(context.Background(), "x", 0, "en-US"); err == nil {
+		t.Fatal("expected SearchTV error")
+	}
+	if _, err := c.GetMovie(context.Background(), 1, "en-US"); err == nil {
+		t.Fatal("expected GetMovie error")
+	}
+	if _, err := c.GetTV(context.Background(), 1, "en-US"); err == nil {
+		t.Fatal("expected GetTV error")
+	}
+	if _, err := c.GetPerson(context.Background(), 1, "en-US"); err == nil {
+		t.Fatal("expected GetPerson error")
+	}
+	if _, err := c.GetSeason(context.Background(), 1, 1, "en-US"); err == nil {
+		t.Fatal("expected GetSeason error")
+	}
+}
+
+func TestClientCollectionAndTrendingErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+
+	c := NewClient(1000)
+	c.SetBaseURL(server.URL)
+
+	if _, err := c.GetTrending(context.Background(), "movie", "day", 5); err == nil {
+		t.Fatal("expected trending error")
+	}
+	if _, err := c.GetCollectionPreset(context.Background(), "trending", "movie", "day", 5); err == nil {
+		t.Fatal("expected trending preset error")
+	}
+	if _, err := c.GetCollectionPreset(context.Background(), "top_rated", "tv", "", 5); err == nil {
+		t.Fatal("expected tv preset error")
+	}
+	if _, err := c.GetCollectionPreset(context.Background(), "upcoming", "movie", "", 5); err == nil {
+		t.Fatal("expected movie preset error")
+	}
+	if _, err := c.GetCollectionPreset(context.Background(), "on_the_air", "tv", "", 5); err == nil {
+		t.Fatal("expected on_the_air preset error")
+	}
+}
+
+func TestClientCollectionPresetOversizedFirstPageIsTrimmed(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"page":        1,
+			"total_pages": 1,
+			"results": []map[string]any{
+				{"id": 1, "title": "A"},
+				{"id": 2, "title": "B"},
+				{"id": 3, "title": "C"},
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	c := NewClient(1000)
+	c.SetBaseURL(server.URL)
+	results, err := c.GetCollectionPreset(context.Background(), "popular", "movie", "", 2)
+	if err != nil {
+		t.Fatalf("GetCollectionPreset error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(results))
+	}
 }
 
 func TestClientGetTrending(t *testing.T) {

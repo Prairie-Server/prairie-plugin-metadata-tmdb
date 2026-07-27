@@ -11,16 +11,22 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	pluginv1 "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
-	publicmanifest "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginsdk/manifest"
-	"github.com/prairie-server/prairie-plugin-sdk/pkg/pluginsdk/runtime"
 	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
 	"github.com/prairie-server/prairie-plugin-metadata-tmdb/models"
 	"github.com/prairie-server/prairie-plugin-metadata-tmdb/provider"
+	pluginv1 "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
+	publicmanifest "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginsdk/manifest"
+	"github.com/prairie-server/prairie-plugin-sdk/pkg/pluginsdk/runtime"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
 var version string
+
+var (
+	osExecutable = os.Executable
+	osReadFile   = os.ReadFile
+	runtimeServe = runtime.Serve
+)
 
 type runtimeServer struct {
 	pluginv1.UnimplementedRuntimeServer
@@ -329,7 +335,7 @@ func main() {
 	}
 
 	ms := &metadataServer{runtime: rs}
-	runtime.Serve(runtime.ServeConfig{
+	runtimeServe(runtime.ServeConfig{
 		Servers: runtime.CapabilityServers{
 			Runtime:          rs,
 			MetadataProvider: ms,
@@ -348,11 +354,11 @@ func loadManifest() (*pluginv1.PluginManifest, error) {
 		manifest.Version = version
 	}
 
-	executablePath, err := os.Executable()
+	executablePath, err := osExecutable()
 	if err != nil {
 		return nil, fmt.Errorf("resolve executable path: %w", err)
 	}
-	binaryData, err := os.ReadFile(executablePath)
+	binaryData, err := osReadFile(executablePath)
 	if err != nil {
 		return nil, fmt.Errorf("read executable %q: %w", executablePath, err)
 	}
