@@ -839,31 +839,31 @@ func TestSearchByProviderIDsAndSeriesTitle(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/configuration":
+		switch r.URL.Path {
+		case "/configuration":
 			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-		case r.URL.Path == "/movie/42":
+		case "/movie/42":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": 42, "title": "Movie", "original_title": "Movie", "original_language": "en",
 				"release_date": "2020-01-01", "overview": "o",
 				"external_ids": map[string]any{"imdb_id": "tt1", "tvdb_id": 9},
-				"credits": map[string]any{"cast": []any{}, "crew": []any{}},
-				"images": map[string]any{}, "release_dates": map[string]any{"results": []any{}},
+				"credits":      map[string]any{"cast": []any{}, "crew": []any{}},
+				"images":       map[string]any{}, "release_dates": map[string]any{"results": []any{}},
 			})
-		case r.URL.Path == "/tv/77":
+		case "/tv/77":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": 77, "name": "Show", "original_name": "Show", "original_language": "en",
 				"first_air_date": "2019-01-01", "overview": "o",
 				"external_ids": map[string]any{"imdb_id": "tt2", "tvdb_id": 8},
-				"credits": map[string]any{"cast": []any{}, "crew": []any{}},
-				"images": map[string]any{}, "content_ratings": map[string]any{"results": []any{}},
+				"credits":      map[string]any{"cast": []any{}, "crew": []any{}},
+				"images":       map[string]any{}, "content_ratings": map[string]any{"results": []any{}},
 				"seasons": []any{}, "networks": []any{}, "genres": []any{},
 			})
-		case r.URL.Path == "/find/tt1":
+		case "/find/tt1":
 			_ = json.NewEncoder(w).Encode(map[string]any{"movie_results": []map[string]any{{"id": 42}}})
-		case r.URL.Path == "/find/81189":
+		case "/find/81189":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tv_results": []map[string]any{{"id": 77}}})
-		case r.URL.Path == "/search/tv":
+		case "/search/tv":
 			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{
 				"id": 77, "name": "Localized", "original_name": "Original", "original_language": "ja",
 				"first_air_date": "2019-05-01", "poster_path": "/p.jpg", "overview": "ov",
@@ -928,13 +928,13 @@ func TestGetMovieMetadataWithCreditsKeywordsAndRating(t *testing.T) {
 				"overview": "ov", "tagline": "tg", "runtime": 100, "release_date": "2021-02-03",
 				"vote_average": 8.1, "poster_path": "/p.jpg", "backdrop_path": "/b.jpg",
 				"imdb_id": "tt999", "origin_country": []string{"FR"},
-				"genres": []map[string]any{{"id": 1, "name": "Drama"}},
+				"genres":               []map[string]any{{"id": 1, "name": "Drama"}},
 				"production_companies": []map[string]any{{"id": 2, "name": "Studio"}},
-				"keywords": map[string]any{"keywords": []map[string]any{{"name": "noir"}, {"name": "Noir"}}},
-				"alternative_titles": map[string]any{"titles": []map[string]any{{"title": "Alt"}, {"title": "T"}}},
-				"external_ids": map[string]any{"tvdb_id": 55},
+				"keywords":             map[string]any{"keywords": []map[string]any{{"name": "noir"}, {"name": "Noir"}}},
+				"alternative_titles":   map[string]any{"titles": []map[string]any{{"title": "Alt"}, {"title": "T"}}},
+				"external_ids":         map[string]any{"tvdb_id": 55},
 				"release_dates": map[string]any{"results": []map[string]any{{
-					"iso_3166_1": "US",
+					"iso_3166_1":    "US",
 					"release_dates": []map[string]any{{"type": 3, "certification": "R"}},
 				}}},
 				"credits": map[string]any{
@@ -995,9 +995,9 @@ func TestGetImagesForSeries(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": 77, "poster_path": "/primary.jpg",
 				"images": map[string]any{
-					"posters": []map[string]any{{"file_path": "/p.jpg", "width": 1, "height": 2, "vote_average": 1}},
+					"posters":   []map[string]any{{"file_path": "/p.jpg", "width": 1, "height": 2, "vote_average": 1}},
 					"backdrops": []map[string]any{{"file_path": "/b.jpg", "width": 3, "height": 4}},
-					"logos": []map[string]any{{"file_path": "/l.png", "width": 5, "height": 6}},
+					"logos":     []map[string]any{{"file_path": "/l.png", "width": 5, "height": 6}},
 				},
 			})
 		default:
@@ -1026,14 +1026,14 @@ func TestGetTVMetadataRichFields(t *testing.T) {
 				"overview": "ov", "tagline": "tg", "first_air_date": "2018-03-04", "last_air_date": "2020-01-01",
 				"number_of_seasons": 3, "status": "Ended", "vote_average": 9.1,
 				"poster_path": "/p.jpg", "backdrop_path": "/b.jpg", "origin_country": []string{"FR"},
-				"genres": []map[string]any{{"name": "Drama"}},
-				"networks": []map[string]any{{"name": "Canal"}},
+				"genres":               []map[string]any{{"name": "Drama"}},
+				"networks":             []map[string]any{{"name": "Canal"}},
 				"production_companies": []map[string]any{{"name": "Studio"}},
-				"keywords": map[string]any{"results": []map[string]any{{"name": "crime"}}},
+				"keywords":             map[string]any{"results": []map[string]any{{"name": "crime"}}},
 				"alternative_titles": map[string]any{"results": []map[string]any{
 					{"name": "Alt Name"}, {"title": "Alt Title"}, {"title": "Localized"},
 				}},
-				"external_ids": map[string]any{"imdb_id": "tt88", "tvdb_id": 123},
+				"external_ids":    map[string]any{"imdb_id": "tt88", "tvdb_id": 123},
 				"content_ratings": map[string]any{"results": []map[string]any{{"iso_3166_1": "US", "rating": "TV-MA"}}},
 				"credits": map[string]any{
 					"cast": []map[string]any{{"id": 1, "name": "A", "character": "C", "order": 0}},
@@ -1160,8 +1160,8 @@ func TestSearchBySeriesTmdbID(t *testing.T) {
 				"id": 5, "name": "S", "original_name": "S", "original_language": "en",
 				"first_air_date": "2000-01-01", "overview": "o", "poster_path": "/p.jpg",
 				"external_ids": map[string]any{"imdb_id": "tt5", "tvdb_id": 7},
-				"credits": map[string]any{"cast": []any{}, "crew": []any{}},
-				"images": map[string]any{}, "content_ratings": map[string]any{"results": []any{}},
+				"credits":      map[string]any{"cast": []any{}, "crew": []any{}},
+				"images":       map[string]any{}, "content_ratings": map[string]any{"results": []any{}},
 				"seasons": []any{}, "networks": []any{}, "genres": []any{},
 			})
 		default:
