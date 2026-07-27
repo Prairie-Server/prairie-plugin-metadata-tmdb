@@ -5,10 +5,53 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestNewClientDefaultRateLimit(t *testing.T) {
+	t.Parallel()
+	if c := NewClient("key", 0); c == nil {
+		t.Fatal("expected client")
+	}
+}
+
+func TestClientSetAPIKey(t *testing.T) {
+	t.Parallel()
+
+	c := NewClient("", 1000)
+	c.SetAPIKey("updated-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("api_key"); got != "updated-key" {
+			t.Fatalf("api_key = %q, want updated-key", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	t.Cleanup(server.Close)
+	c.SetBaseURL(server.URL)
+
+	var dest map[string]any
+	if err := c.doGet(context.Background(), "/configured", &dest); err != nil {
+		t.Fatalf("doGet error = %v", err)
+	}
+}
+
+func TestClientDoGetMissingAPIKey(t *testing.T) {
+	t.Parallel()
+
+	c := NewClient("", 1000)
+	var dest map[string]any
+	err := c.doGet(context.Background(), "/missing-key", &dest)
+	if err == nil {
+		t.Fatal("expected missing API key error")
+	}
+	if !strings.Contains(err.Error(), "missing API key") {
+		t.Fatalf("error = %v, want missing API key", err)
+	}
+}
 
 func TestClientImageURL(t *testing.T) {
 	t.Parallel()
