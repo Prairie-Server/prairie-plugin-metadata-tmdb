@@ -36,7 +36,6 @@ func TestRuntimeServerConfigure_NoOp(t *testing.T) {
 	}
 }
 
-
 func TestRuntimeServerConfigure_CreatesProvider(t *testing.T) {
 	server := &runtimeServer{}
 
