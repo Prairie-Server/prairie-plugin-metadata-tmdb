@@ -11,6 +11,7 @@ import (
 
 	pluginv1 "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
 	pluginsdkruntime "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginsdk/runtime"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
@@ -34,6 +35,7 @@ func TestRuntimeServerConfigure_NoOp(t *testing.T) {
 		t.Fatal("expected provider to be available")
 	}
 }
+
 
 func TestRuntimeServerConfigure_CreatesProvider(t *testing.T) {
 	server := &runtimeServer{}
@@ -112,6 +114,27 @@ func TestConfigEntryString(t *testing.T) {
 	}
 }
 
+func TestImageRecordMetadataIncludesArtworkTextSignal(t *testing.T) {
+	includesText := false
+	md := imageRecordMetadata(metadata.RemoteImage{
+		Rating:       8.5,
+		IncludesText: &includesText,
+	})
+	if md == nil {
+		t.Fatal("imageRecordMetadata() = nil")
+	}
+	if got := md.GetFields()["rating"].GetNumberValue(); got != 8.5 {
+		t.Fatalf("rating = %v, want 8.5", got)
+	}
+	includesTextField, ok := md.GetFields()["includes_text"]
+	if !ok {
+		t.Fatal("includes_text metadata is missing")
+	}
+	if includesTextField.GetBoolValue() {
+		t.Fatal("includes_text = true, want false")
+	}
+}
+
 func mustStruct(t *testing.T, value map[string]any) *structpb.Struct {
 	t.Helper()
 
@@ -149,18 +172,23 @@ func TestResolveImageURL(t *testing.T) {
 		// poster variants
 		{name: "poster card", path: "tmdb://poster/poster.jpg", variant: "card", wantURL: "https://image.tmdb.org/t/p/w300/poster.jpg"},
 		{name: "poster featured", path: "tmdb://poster/poster.jpg", variant: "featured", wantURL: "https://image.tmdb.org/t/p/w500/poster.jpg"},
+		{name: "poster large", path: "tmdb://poster/poster.jpg", variant: "large", wantURL: "https://image.tmdb.org/t/p/w780/poster.jpg"},
 		{name: "poster full", path: "tmdb://poster/poster.jpg", variant: "full", wantURL: "https://image.tmdb.org/t/p/w780/poster.jpg"},
 		{name: "poster original", path: "tmdb://poster/poster.jpg", variant: "original", wantURL: "https://image.tmdb.org/t/p/original/poster.jpg"},
 		{name: "poster empty variant", path: "tmdb://poster/poster.jpg", variant: "", wantURL: "https://image.tmdb.org/t/p/original/poster.jpg"},
 		// backdrop variants
 		{name: "backdrop featured", path: "tmdb://backdrop/backdrop.jpg", variant: "featured", wantURL: "https://image.tmdb.org/t/p/w1280/backdrop.jpg"},
 		{name: "backdrop card", path: "tmdb://backdrop/backdrop.jpg", variant: "card", wantURL: "https://image.tmdb.org/t/p/w300/backdrop.jpg"},
+		{name: "backdrop large", path: "tmdb://backdrop/backdrop.jpg", variant: "large", wantURL: "https://image.tmdb.org/t/p/w1280/backdrop.jpg"},
 		// still variants
 		{name: "still card", path: "tmdb://still/still.jpg", variant: "card", wantURL: "https://image.tmdb.org/t/p/w300/still.jpg"},
+		{name: "still large", path: "tmdb://still/still.jpg", variant: "large", wantURL: "https://image.tmdb.org/t/p/original/still.jpg"},
 		// logo variants
 		{name: "logo featured", path: "tmdb://logo/logo.png", variant: "featured", wantURL: "https://image.tmdb.org/t/p/w500/logo.png"},
+		{name: "logo large", path: "tmdb://logo/logo.png", variant: "large", wantURL: "https://image.tmdb.org/t/p/w500/logo.png"},
 		// profile variants
 		{name: "profile card", path: "tmdb://profile/person.jpg", variant: "card", wantURL: "https://image.tmdb.org/t/p/w185/person.jpg"},
+		{name: "profile large", path: "tmdb://profile/person.jpg", variant: "large", wantURL: "https://image.tmdb.org/t/p/h632/person.jpg"},
 		// empty path
 		{name: "empty path", path: "", variant: "card", wantURL: ""},
 	}
@@ -327,6 +355,81 @@ func TestMetadataServerGetMetadata_IncludesReleaseDate(t *testing.T) {
 	}
 }
 
+func TestMetadataServerGetMetadata_IncludesVideos(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"images": map[string]any{
+					"secure_base_url": "https://image.tmdb.org/t/p/",
+				},
+			})
+		case "/movie/123":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":    123,
+				"title": "Example Movie",
+				"videos": map[string]any{
+					"results": []map[string]any{
+						{
+							"id":           "video-1",
+							"iso_639_1":    "en",
+							"key":          "dQw4w9WgXcQ",
+							"name":         "Official Trailer",
+							"site":         "YouTube",
+							"size":         1080,
+							"type":         "Trailer",
+							"official":     true,
+							"published_at": "2024-01-15T00:00:00.000Z",
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := provider.NewClient("test-key", 1000)
+	client.SetBaseURL(server.URL)
+
+	ms := &metadataServer{
+		runtime: &runtimeServer{
+			provider: provider.NewProviderWithClient(client),
+		},
+	}
+
+	resp, err := ms.GetMetadata(context.Background(), &pluginv1.GetMetadataRequest{
+		ProviderId: "123",
+		ItemType:   "movie",
+	})
+	if err != nil {
+		t.Fatalf("GetMetadata() error = %v", err)
+	}
+
+	videos := resp.GetItem().GetVideos()
+	if len(videos) != 1 {
+		t.Fatalf("len(videos) = %d, want 1", len(videos))
+	}
+
+	want := &pluginv1.VideoRecord{
+		ProviderKey: "video-1",
+		Kind:        "trailer",
+		Site:        "youtube",
+		SiteKey:     "dQw4w9WgXcQ",
+		Name:        "Official Trailer",
+		Language:    "en",
+		IsOfficial:  true,
+		SizeHint:    1080,
+		PublishedAt: "2024-01-15T00:00:00.000Z",
+	}
+	if !proto.Equal(videos[0], want) {
+		t.Fatalf("videos[0] = %+v, want %+v", videos[0], want)
+	}
+}
+
 func TestMetadataRequestFromProto_CarriesContextFields(t *testing.T) {
 	req := &pluginv1.GetMetadataRequest{
 		ProviderId: "123",
@@ -360,25 +463,33 @@ func TestMetadataRequestFromProto_CarriesContextFields(t *testing.T) {
 }
 
 func TestAssetRequestsFromProto_CarryProviderContext(t *testing.T) {
+	specials := int32(0)
 	imageReq := imageRequestFromProto(&pluginv1.GetImagesRequest{
 		ProviderId: "123",
-		ItemType:   "movie",
+		ItemType:   "series",
 		ProviderIds: mustStruct(t, map[string]any{
 			"imdb": "tt1234567",
 		}),
-		Language: "es",
+		Language:     "es",
+		SeasonNumber: &specials,
 	}, "tmdb")
-	if imageReq.ContentType != "movie" {
-		t.Fatalf("image ContentType = %q, want movie", imageReq.ContentType)
+	if imageReq.ContentType != "series" {
+		t.Fatalf("image ContentType = %q, want series", imageReq.ContentType)
 	}
 	if imageReq.Language != "es" {
 		t.Fatalf("image Language = %q, want es", imageReq.Language)
+	}
+	if imageReq.SeasonNumber == nil || *imageReq.SeasonNumber != 0 {
+		t.Fatalf("image SeasonNumber = %v, want present Specials value 0", imageReq.SeasonNumber)
 	}
 	if !reflect.DeepEqual(imageReq.ProviderIDs, map[string]string{
 		"tmdb": "123",
 		"imdb": "tt1234567",
 	}) {
 		t.Fatalf("image ProviderIDs = %#v", imageReq.ProviderIDs)
+	}
+	if got := imageRequestFromProto(&pluginv1.GetImagesRequest{}, "tmdb"); got.SeasonNumber != nil {
+		t.Fatalf("absent season number mapped as %v", got.SeasonNumber)
 	}
 
 	seasonsReq := seasonsRequestFromProto(&pluginv1.GetSeasonsRequest{

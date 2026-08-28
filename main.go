@@ -248,15 +248,29 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 			Language: img.Language,
 			Width:    int32(img.Width),
 			Height:   int32(img.Height),
+			Metadata: imageRecordMetadata(img),
 		}
-		if img.Rating > 0 {
-			record.Metadata, _ = structpb.NewStruct(map[string]any{
-				"rating": img.Rating,
-			})
+		if img.SeasonNumber != nil {
+			seasonNumber := int32(*img.SeasonNumber)
+			record.SeasonNumber = &seasonNumber
 		}
 		response.Images = append(response.Images, record)
 	}
 	return response, nil
+}
+
+func imageRecordMetadata(img metadata.RemoteImage) *structpb.Struct {
+	if img.Rating <= 0 && img.IncludesText == nil {
+		return nil
+	}
+	fields := make(map[string]any, 2)
+	if img.Rating > 0 {
+		fields["rating"] = img.Rating
+	}
+	if img.IncludesText != nil {
+		fields["includes_text"] = *img.IncludesText
+	}
+	return structFromMap(fields)
 }
 
 // tmdbCanonicalPath wraps a raw TMDB file path with the tmdb:// scheme and role
@@ -284,6 +298,25 @@ func tmdbVariantSize(variant, role string) string {
 			return "w185"
 		}
 		return "w500"
+	case "large":
+		// Sits between "featured" and "full": ~780px posters/stills and
+		// ~1280px backdrops/logos, mapped to the nearest real TMDB size.
+		switch role {
+		case "backdrop":
+			return "w1280"
+		case "profile":
+			// h632 is the largest non-original profile size TMDB serves.
+			return "h632"
+		case "logo":
+			// w500 is the largest non-original logo size TMDB serves.
+			return "w500"
+		case "still":
+			// TMDB tops stills out at w300 below original, so anything at or
+			// above the "large" target has to come from original.
+			return "original"
+		default: // poster and anything else poster-shaped
+			return "w780"
+		}
 	case "full":
 		if role == "poster" {
 			return "w780"
@@ -423,6 +456,7 @@ func metadataItemFromResult(result *metadata.MetadataResult, itemType string) (*
 		TitleAliasesComplete: result.TitleAliasesComplete,
 		TitleLanguage:        result.TitleLanguage,
 		TitleIsFallback:      result.TitleIsFallback,
+		Videos:               videosToRecords(result.Videos),
 	}, nil
 }
 
@@ -490,11 +524,16 @@ func episodesRequestFromProto(req *pluginv1.GetEpisodesRequest, capabilityID str
 }
 
 func imageRequestFromProto(req *pluginv1.GetImagesRequest, capabilityID string) metadata.ImageRequest {
-	return metadata.ImageRequest{
+	result := metadata.ImageRequest{
 		ProviderIDs: providerIDsFromProto(req.GetProviderIds(), capabilityID, req.GetProviderId()),
 		ContentType: req.GetItemType(),
 		Language:    req.GetLanguage(),
 	}
+	if req.SeasonNumber != nil {
+		seasonNumber := int(req.GetSeasonNumber())
+		result.SeasonNumber = &seasonNumber
+	}
+	return result
 }
 
 func peopleToRecords(people []models.ItemPerson) []*pluginv1.PersonRecord {
@@ -515,6 +554,28 @@ func peopleToRecords(people []models.ItemPerson) []*pluginv1.PersonRecord {
 			PlexGuid:       person.PlexGUID,
 			PhotoPath:      tmdbCanonicalPath("profile", person.PhotoPath),
 			PhotoThumbhash: person.PhotoThumbhash,
+		})
+	}
+	return records
+}
+
+func videosToRecords(videos []metadata.VideoResult) []*pluginv1.VideoRecord {
+	if len(videos) == 0 {
+		return nil
+	}
+
+	records := make([]*pluginv1.VideoRecord, 0, len(videos))
+	for _, video := range videos {
+		records = append(records, &pluginv1.VideoRecord{
+			ProviderKey: video.ProviderKey,
+			Kind:        video.Kind,
+			Site:        video.Site,
+			SiteKey:     video.SiteKey,
+			Name:        video.Name,
+			Language:    video.Language,
+			IsOfficial:  video.IsOfficial,
+			SizeHint:    int32(video.SizeHint),
+			PublishedAt: video.PublishedAt,
 		})
 	}
 	return records

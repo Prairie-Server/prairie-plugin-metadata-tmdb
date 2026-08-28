@@ -321,6 +321,146 @@ func TestGetMetadataReturnsAlternativeTitlesAndMarksNativeFallback(t *testing.T)
 	}
 }
 
+func TestGetMetadataMovieReturnsSortedVideos(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"images": map[string]any{
+					"secure_base_url": serverURL(t, r) + "/images/",
+				},
+			})
+		case "/movie/42":
+			appended := r.URL.Query().Get("append_to_response")
+			if !strings.Contains(appended, "videos") {
+				t.Errorf("append_to_response = %q, want videos included", appended)
+			}
+			if !strings.Contains(appended, "alternative_titles") {
+				t.Errorf("append_to_response = %q, want alternative_titles preserved", appended)
+			}
+			if got := r.URL.Query().Get("include_video_language"); got != "en-US,en,null" {
+				t.Errorf("include_video_language = %q, want en-US,en,null", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":    42,
+				"title": "Movie",
+				"videos": map[string]any{
+					"results": []map[string]any{
+						{"id": "clip-1", "iso_639_1": "en", "key": "clipKey", "name": "A Clip", "site": "YouTube", "size": 720, "type": "Clip", "official": true},
+						{"id": "fan-trailer", "iso_639_1": "en", "key": "fanKey", "name": "Fan Trailer", "site": "YouTube", "size": 1080, "type": "Trailer", "official": false},
+						{"id": "bts-1", "iso_639_1": "en", "key": "btsKey", "name": "Making Of", "site": "Vimeo", "size": 1080, "type": "Behind the Scenes", "official": true},
+						{"id": "broken", "site": "YouTube", "type": "Trailer"},
+						{"id": "official-trailer", "iso_639_1": "en", "key": "offKey", "name": "Official Trailer", "site": "YouTube", "size": 2160, "type": "Trailer", "official": true, "published_at": "2024-01-15T00:00:00.000Z"},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	p := newTMDBTestProvider(server.URL)
+
+	result, err := p.GetMetadata(context.Background(), metadata.MetadataRequest{
+		ProviderIDs: map[string]string{"tmdb": "42"},
+		ContentType: "movie",
+		Language:    "en",
+	})
+	if err != nil {
+		t.Fatalf("GetMetadata() error = %v", err)
+	}
+
+	// The entry without a key is dropped; official trailers sort first, then
+	// other trailers, then the rest in TMDB order.
+	wantOrder := []string{"official-trailer", "fan-trailer", "clip-1", "bts-1"}
+	if len(result.Videos) != len(wantOrder) {
+		t.Fatalf("len(Videos) = %d, want %d", len(result.Videos), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if got := result.Videos[i].ProviderKey; got != want {
+			t.Fatalf("Videos[%d].ProviderKey = %q, want %q", i, got, want)
+		}
+	}
+
+	want := metadata.VideoResult{
+		ProviderKey: "official-trailer",
+		Kind:        "trailer",
+		Site:        "youtube",
+		SiteKey:     "offKey",
+		Name:        "Official Trailer",
+		Language:    "en",
+		IsOfficial:  true,
+		SizeHint:    2160,
+		PublishedAt: "2024-01-15T00:00:00.000Z",
+	}
+	if result.Videos[0] != want {
+		t.Fatalf("Videos[0] = %+v, want %+v", result.Videos[0], want)
+	}
+
+	if got := result.Videos[3]; got.Kind != "behind_the_scenes" || got.Site != "vimeo" {
+		t.Fatalf("Videos[3] kind/site = %q/%q, want behind_the_scenes/vimeo", got.Kind, got.Site)
+	}
+}
+
+func TestGetMetadataSeriesReturnsVideos(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"images": map[string]any{
+					"secure_base_url": serverURL(t, r) + "/images/",
+				},
+			})
+		case "/tv/77":
+			if got := r.URL.Query().Get("append_to_response"); !strings.Contains(got, "videos") {
+				t.Errorf("append_to_response = %q, want videos included", got)
+			}
+			if got := r.URL.Query().Get("include_video_language"); got != "en-US,en,null" {
+				t.Errorf("include_video_language = %q, want en-US,en,null", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":   77,
+				"name": "Series",
+				"videos": map[string]any{
+					"results": []map[string]any{
+						{"id": "s-teaser", "iso_639_1": "en", "key": "teaserKey", "name": "Season Teaser", "site": "YouTube", "size": 1080, "type": "Teaser", "official": true},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	p := newTMDBTestProvider(server.URL)
+
+	result, err := p.GetMetadata(context.Background(), metadata.MetadataRequest{
+		ProviderIDs: map[string]string{"tmdb": "77"},
+		ContentType: "series",
+		Language:    "en",
+	})
+	if err != nil {
+		t.Fatalf("GetMetadata() error = %v", err)
+	}
+
+	if len(result.Videos) != 1 {
+		t.Fatalf("len(Videos) = %d, want 1", len(result.Videos))
+	}
+	if got := result.Videos[0]; got.Kind != "teaser" || got.SiteKey != "teaserKey" {
+		t.Fatalf("Videos[0] = %+v, want teaser/teaserKey", got)
+	}
+}
+
 func TestGetImagesReturnsRawPaths(t *testing.T) {
 	t.Parallel()
 
@@ -368,19 +508,285 @@ func TestGetImagesReturnsRawPaths(t *testing.T) {
 		t.Fatalf("len(images) = %d, want 3", len(images))
 	}
 
-	got := map[metadata.ImageType]string{}
+	got := map[metadata.ImageType]metadata.RemoteImage{}
 	for _, img := range images {
-		got[img.Type] = img.URL
+		got[img.Type] = img
 	}
 
-	if got[metadata.ImagePoster] != "/poster.jpg" {
-		t.Fatalf("poster URL = %q", got[metadata.ImagePoster])
+	if got[metadata.ImagePoster].URL != "/poster.jpg" {
+		t.Fatalf("poster URL = %q", got[metadata.ImagePoster].URL)
 	}
-	if got[metadata.ImageBackdrop] != "/backdrop.jpg" {
-		t.Fatalf("backdrop URL = %q", got[metadata.ImageBackdrop])
+	if got[metadata.ImagePoster].IncludesText == nil || *got[metadata.ImagePoster].IncludesText {
+		t.Fatalf("poster IncludesText = %v, want false for language-neutral art", got[metadata.ImagePoster].IncludesText)
 	}
-	if got[metadata.ImageLogo] != "/logo.png" {
-		t.Fatalf("logo URL = %q", got[metadata.ImageLogo])
+	if got[metadata.ImageBackdrop].URL != "/backdrop.jpg" {
+		t.Fatalf("backdrop URL = %q", got[metadata.ImageBackdrop].URL)
+	}
+	if got[metadata.ImageBackdrop].IncludesText == nil || *got[metadata.ImageBackdrop].IncludesText {
+		t.Fatalf("backdrop IncludesText = %v, want false for language-neutral art", got[metadata.ImageBackdrop].IncludesText)
+	}
+	if got[metadata.ImageLogo].URL != "/logo.png" {
+		t.Fatalf("logo URL = %q", got[metadata.ImageLogo].URL)
+	}
+	if got[metadata.ImageLogo].IncludesText == nil || *got[metadata.ImageLogo].IncludesText {
+		t.Fatalf("logo IncludesText = %v, want false for language-neutral art", got[metadata.ImageLogo].IncludesText)
+	}
+}
+
+func TestGetImagesTreatsNoLanguageCodeAsTextless(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"images": map[string]any{
+					"secure_base_url": serverURL(t, r) + "/images/",
+				},
+			})
+		case "/movie/42":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": 42,
+				"images": map[string]any{
+					"posters": []map[string]any{
+						{"file_path": "/poster-xx.jpg", "iso_639_1": "xx", "vote_average": 8.0},
+					},
+					"backdrops": []map[string]any{
+						{"file_path": "/backdrop-en.jpg", "iso_639_1": "en", "vote_average": 7.0},
+					},
+					"logos": []map[string]any{
+						{"file_path": "/logo-en.png", "iso_639_1": "en", "vote_average": 6.0},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	images, err := newTMDBTestProvider(server.URL).GetImages(context.Background(), metadata.ImageRequest{
+		ProviderIDs: map[string]string{"tmdb": "42"},
+		ContentType: "movie",
+	})
+	if err != nil {
+		t.Fatalf("GetImages() error = %v", err)
+	}
+
+	got := map[metadata.ImageType]metadata.RemoteImage{}
+	for _, img := range images {
+		got[img.Type] = img
+	}
+
+	poster := got[metadata.ImagePoster]
+	if poster.IncludesText == nil || *poster.IncludesText {
+		t.Fatalf("poster IncludesText = %v, want false for TMDB \"xx\" (No Language)", poster.IncludesText)
+	}
+	backdrop := got[metadata.ImageBackdrop]
+	if backdrop.IncludesText == nil || !*backdrop.IncludesText {
+		t.Fatalf("backdrop IncludesText = %v, want true for language-tagged art", backdrop.IncludesText)
+	}
+	logo := got[metadata.ImageLogo]
+	if logo.IncludesText == nil || !*logo.IncludesText {
+		t.Fatalf("logo IncludesText = %v, want true for language-tagged art", logo.IncludesText)
+	}
+}
+
+func TestGetImagesReturnsExactSeasonGallery(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"images": map[string]any{"secure_base_url": serverURL(t, r) + "/images/"},
+			})
+		case "/tv/42/season/0/images":
+			if got := r.URL.Query().Get("language"); got != "fr" {
+				t.Fatalf("language = %q, want fr", got)
+			}
+			if got := r.URL.Query().Get("include_image_language"); got != "fr,en,null" {
+				t.Fatalf("include_image_language = %q, want fr,en,null", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"posters": []map[string]any{
+					{"file_path": "/specials-fr.jpg", "iso_639_1": "fr", "width": 2000, "height": 3000, "vote_average": 8.0},
+					{"file_path": "/specials-en.jpg", "iso_639_1": "en", "width": 2000, "height": 3000, "vote_average": 7.0},
+				},
+				"backdrops": []map[string]any{{"file_path": "/show-backdrop.jpg"}},
+				"logos":     []map[string]any{{"file_path": "/show-logo.png"}},
+			})
+		case "/tv/42/season/0":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":          9,
+				"poster_path": "/specials-en.jpg",
+				"episodes":    []any{},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	specials := 0
+	images, err := newTMDBTestProvider(server.URL).GetImages(context.Background(), metadata.ImageRequest{
+		ProviderIDs:  map[string]string{"tmdb": "42"},
+		ContentType:  "series",
+		Language:     "fr",
+		SeasonNumber: &specials,
+	})
+	if err != nil {
+		t.Fatalf("GetImages() error = %v", err)
+	}
+	if len(images) != 2 {
+		t.Fatalf("images = %#v, want two season posters only", images)
+	}
+	for _, image := range images {
+		if image.Type != metadata.ImagePoster {
+			t.Fatalf("image type = %v, want poster", image.Type)
+		}
+		if image.SeasonNumber == nil || *image.SeasonNumber != 0 {
+			t.Fatalf("image SeasonNumber = %v, want present Specials value 0", image.SeasonNumber)
+		}
+	}
+	if images[0].URL != "/specials-fr.jpg" || images[1].URL != "/specials-en.jpg" {
+		t.Fatalf("images = %#v, want exact Specials gallery", images)
+	}
+	if images[0].Rating != 8.0 {
+		t.Fatalf("unboosted rating = %v, want 8.0", images[0].Rating)
+	}
+	if images[1].Rating != 9.0 {
+		t.Fatalf("season primary poster rating = %v, want 9.0", images[1].Rating)
+	}
+}
+
+func TestGetImagesKeepsSeasonGalleryWhenSeasonLookupFails(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"images": map[string]any{"secure_base_url": serverURL(t, r) + "/images/"},
+			})
+		case "/tv/42/season/3/images":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"posters": []map[string]any{
+					{"file_path": "/season-three.jpg", "iso_639_1": "fr", "vote_average": 8.0},
+				},
+			})
+		case "/tv/42/season/3":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	seasonNumber := 3
+	images, err := newTMDBTestProvider(server.URL).GetImages(context.Background(), metadata.ImageRequest{
+		ProviderIDs:  map[string]string{"tmdb": "42"},
+		ContentType:  "series",
+		Language:     "fr",
+		SeasonNumber: &seasonNumber,
+	})
+	if err != nil {
+		t.Fatalf("GetImages() error = %v", err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("images = %#v, want the single season poster", images)
+	}
+	if images[0].URL != "/season-three.jpg" {
+		t.Fatalf("images[0].URL = %q, want /season-three.jpg", images[0].URL)
+	}
+	if images[0].Rating != 8.0 {
+		t.Fatalf("images[0].Rating = %v, want unboosted 8.0", images[0].Rating)
+	}
+}
+
+func TestGetImagesScopesEnglishFallbackToSeasonGalleries(t *testing.T) {
+	t.Parallel()
+
+	seasonThree := 3
+	tests := []struct {
+		name        string
+		path        string
+		contentType string
+		wantLang    string
+		response    map[string]any
+		request     metadata.ImageRequest
+	}{
+		{
+			name:     "movie",
+			path:     "/movie/42",
+			wantLang: "fr,null",
+			response: map[string]any{"id": 42, "images": map[string]any{}},
+			request: metadata.ImageRequest{
+				ProviderIDs: map[string]string{"tmdb": "42"},
+				ContentType: "movie",
+				Language:    "fr",
+			},
+		},
+		{
+			name:     "series",
+			path:     "/tv/42",
+			wantLang: "fr,null",
+			response: map[string]any{"id": 42, "images": map[string]any{}},
+			request: metadata.ImageRequest{
+				ProviderIDs: map[string]string{"tmdb": "42"},
+				ContentType: "series",
+				Language:    "fr",
+			},
+		},
+		{
+			name:     "season gallery",
+			path:     "/tv/42/season/3/images",
+			wantLang: "fr,en,null",
+			response: map[string]any{},
+			request: metadata.ImageRequest{
+				ProviderIDs:  map[string]string{"tmdb": "42"},
+				ContentType:  "series",
+				Language:     "fr",
+				SeasonNumber: &seasonThree,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+
+				switch r.URL.Path {
+				case "/configuration":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"images": map[string]any{"secure_base_url": serverURL(t, r) + "/images/"},
+					})
+				case "/tv/42/season/3":
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 9, "episodes": []any{}})
+				case tt.path:
+					if got := r.URL.Query().Get("include_image_language"); got != tt.wantLang {
+						t.Fatalf("include_image_language = %q, want %q", got, tt.wantLang)
+					}
+					_ = json.NewEncoder(w).Encode(tt.response)
+				default:
+					t.Fatalf("unexpected path: %s", r.URL.String())
+				}
+			}))
+			defer server.Close()
+
+			if _, err := newTMDBTestProvider(server.URL).GetImages(context.Background(), tt.request); err != nil {
+				t.Fatalf("GetImages() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -452,9 +858,66 @@ func TestGetImagesPrefersTMDBPrimaryPoster(t *testing.T) {
 	if textless == nil {
 		t.Fatal("textless poster missing from GetImages() result")
 	}
+	if primary.IncludesText == nil || !*primary.IncludesText {
+		t.Fatalf("primary IncludesText = %v, want true", primary.IncludesText)
+	}
+	if textless.IncludesText == nil || *textless.IncludesText {
+		t.Fatalf("textless IncludesText = %v, want false", textless.IncludesText)
+	}
 	if primary.Rating <= textless.Rating {
 		t.Fatalf("primary rating = %v, textless rating = %v; want primary > textless", primary.Rating, textless.Rating)
 	}
+}
+
+func TestGetImagesPrimaryBoostPreservesTextlessSignal(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/configuration":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"images": map[string]any{"secure_base_url": serverURL(t, r) + "/images/"},
+			})
+		case "/movie/42":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":          42,
+				"poster_path": "/poster-textless.jpg",
+				"images": map[string]any{
+					"posters": []map[string]any{
+						{"file_path": "/poster-textless.jpg", "iso_639_1": nil, "vote_average": 8.0},
+						{"file_path": "/poster-english.jpg", "iso_639_1": "en", "vote_average": 7.0},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	images, err := newTMDBTestProvider(server.URL).GetImages(context.Background(), metadata.ImageRequest{
+		ProviderIDs: map[string]string{"tmdb": "42"},
+		ContentType: "movie",
+		Language:    "en",
+	})
+	if err != nil {
+		t.Fatalf("GetImages() error = %v", err)
+	}
+	for i := range images {
+		if images[i].URL != "/poster-textless.jpg" {
+			continue
+		}
+		if images[i].Language != "en" {
+			t.Fatalf("primary language = %q, want boosted request language en", images[i].Language)
+		}
+		if images[i].IncludesText == nil || *images[i].IncludesText {
+			t.Fatalf("primary IncludesText = %v, want false", images[i].IncludesText)
+		}
+		return
+	}
+	t.Fatal("primary textless poster missing")
 }
 
 func TestGetImagesAddsPrimaryPosterWhenImagesMissIt(t *testing.T) {
@@ -520,6 +983,12 @@ func TestGetImagesAddsPrimaryPosterWhenImagesMissIt(t *testing.T) {
 	}
 	if primary.Language != "en" {
 		t.Fatalf("primary language = %q, want en", primary.Language)
+	}
+	if primary.IncludesText == nil || !*primary.IncludesText {
+		t.Fatalf("primary IncludesText = %v, want true for language-selected primary", primary.IncludesText)
+	}
+	if alt.IncludesText == nil || *alt.IncludesText {
+		t.Fatalf("alt IncludesText = %v, want false for language-neutral art", alt.IncludesText)
 	}
 	if primary.Rating <= alt.Rating {
 		t.Fatalf("primary rating = %v, alt rating = %v; want primary > alt", primary.Rating, alt.Rating)
