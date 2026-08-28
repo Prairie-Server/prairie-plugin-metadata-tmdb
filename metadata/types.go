@@ -101,6 +101,21 @@ type MetadataResult struct {
 	// ShowStatus is the TMDB series lifecycle status verbatim ("Returning
 	// Series", "Ended", "Canceled", ...); the host normalizes spellings.
 	ShowStatus string
+	Videos     []VideoResult
+}
+
+// VideoResult carries a remote promotional/supplemental video (trailer,
+// teaser, featurette, ...) hosted on an external site such as YouTube.
+type VideoResult struct {
+	ProviderKey string // Provider-scoped video ID (e.g. TMDB video id)
+	Kind        string // Normalized kind: "trailer", "teaser", "featurette", ...
+	Site        string // Lowercase hosting site, e.g. "youtube", "vimeo"
+	SiteKey     string // Site-specific video key
+	Name        string
+	Language    string // ISO 639-1 code
+	IsOfficial  bool
+	SizeHint    int // e.g. 1080
+	PublishedAt string
 }
 
 // Ratings holds ratings from multiple sources.
@@ -116,16 +131,21 @@ type ImageRequest struct {
 	ProviderIDs map[string]string
 	ContentType string
 	Language    string
+	// SeasonNumber is present only for a season artwork gallery. A pointer is
+	// required because season zero is Specials rather than an unset value.
+	SeasonNumber *int
 }
 
 // RemoteImage describes an available image from a provider.
 type RemoteImage struct {
-	URL      string
-	Type     ImageType
-	Language string
-	Width    int
-	Height   int
-	Rating   float64
+	URL          string
+	Type         ImageType
+	Language     string
+	Width        int
+	Height       int
+	Rating       float64
+	SeasonNumber *int
+	IncludesText *bool // nil when the provider does not report text presence
 }
 
 // ImageType classifies image purpose.

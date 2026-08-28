@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -460,6 +461,7 @@ func (p *Provider) getMovieMetadata(ctx context.Context, id int, lang string) (*
 	result.BackdropPath = movie.BackdropPath
 
 	result.People = convertPeople(movie.Credits)
+	result.Videos = convertVideos(movie.Videos)
 
 	return result, nil
 }
@@ -523,6 +525,7 @@ func (p *Provider) getTVMetadata(ctx context.Context, id int, lang string) (*met
 	result.BackdropPath = tv.BackdropPath
 
 	result.People = convertPeople(tv.Credits)
+	result.Videos = convertVideos(tv.Videos)
 
 	return result, nil
 }
@@ -547,6 +550,11 @@ func (p *Provider) GetImages(ctx context.Context, req metadata.ImageRequest) ([]
 	lang := tmdbLanguage(req.Language)
 	var imgs *ImageSet
 	primaryPosterPath := ""
+	seasonGallery := req.ContentType == "series" && req.SeasonNumber != nil
+	var scopedSeasonNumber *int
+	if seasonGallery {
+		scopedSeasonNumber = req.SeasonNumber
+	}
 	switch req.ContentType {
 	case "movie":
 		movie, err := p.client.GetMovie(ctx, id, lang)
@@ -556,49 +564,79 @@ func (p *Provider) GetImages(ctx context.Context, req metadata.ImageRequest) ([]
 		imgs = movie.Images
 		primaryPosterPath = movie.PosterPath
 	case "series":
-		tv, err := p.client.GetTV(ctx, id, lang)
-		if err != nil {
-			return nil, err
+		if seasonGallery {
+			imgs, err = p.client.GetTVSeasonImages(ctx, id, *req.SeasonNumber, lang)
+			if err != nil {
+				return nil, err
+			}
+			// The primary-poster boost is best-effort: a failed season lookup
+			// still returns the gallery, just unboosted.
+			if season, err := p.client.GetSeason(ctx, id, *req.SeasonNumber, lang); err == nil {
+				primaryPosterPath = season.PosterPath
+			}
+		} else {
+			tv, err := p.client.GetTV(ctx, id, lang)
+			if err != nil {
+				return nil, err
+			}
+			imgs = tv.Images
+			primaryPosterPath = tv.PosterPath
 		}
-		imgs = tv.Images
-		primaryPosterPath = tv.PosterPath
 	}
 
 	var out []metadata.RemoteImage
 	if imgs != nil {
 		for _, img := range imgs.Posters {
 			out = append(out, metadata.RemoteImage{
-				URL:      img.FilePath,
-				Type:     metadata.ImagePoster,
-				Language: img.ISO639_1,
-				Width:    img.Width,
-				Height:   img.Height,
-				Rating:   img.VoteAverage,
+				URL:          img.FilePath,
+				Type:         metadata.ImagePoster,
+				Language:     img.ISO639_1,
+				Width:        img.Width,
+				Height:       img.Height,
+				Rating:       img.VoteAverage,
+				SeasonNumber: scopedSeasonNumber,
+				IncludesText: tmdbImageIncludesText(img.ISO639_1),
 			})
 		}
-		for _, img := range imgs.Backdrops {
-			out = append(out, metadata.RemoteImage{
-				URL:      img.FilePath,
-				Type:     metadata.ImageBackdrop,
-				Language: img.ISO639_1,
-				Width:    img.Width,
-				Height:   img.Height,
-				Rating:   img.VoteAverage,
-			})
-		}
-		for _, img := range imgs.Logos {
-			out = append(out, metadata.RemoteImage{
-				URL:      img.FilePath,
-				Type:     metadata.ImageLogo,
-				Language: img.ISO639_1,
-				Width:    img.Width,
-				Height:   img.Height,
-				Rating:   img.VoteAverage,
-			})
+		if !seasonGallery {
+			for _, img := range imgs.Backdrops {
+				out = append(out, metadata.RemoteImage{
+					URL:          img.FilePath,
+					Type:         metadata.ImageBackdrop,
+					Language:     img.ISO639_1,
+					Width:        img.Width,
+					Height:       img.Height,
+					Rating:       img.VoteAverage,
+					IncludesText: tmdbImageIncludesText(img.ISO639_1),
+				})
+			}
+			for _, img := range imgs.Logos {
+				out = append(out, metadata.RemoteImage{
+					URL:          img.FilePath,
+					Type:         metadata.ImageLogo,
+					Language:     img.ISO639_1,
+					Width:        img.Width,
+					Height:       img.Height,
+					Rating:       img.VoteAverage,
+					IncludesText: tmdbImageIncludesText(img.ISO639_1),
+				})
+			}
 		}
 	}
 
 	return preferPrimaryImage(out, metadata.ImagePoster, primaryPosterPath, imageLanguage(lang)), nil
+}
+
+// tmdbImageIncludesText derives text presence from TMDB's per-image language
+// tag: a language implies burned-in text, while a blank tag or TMDB's "xx"
+// (No Language) sentinel marks language-neutral art. It must be applied to the
+// raw iso_639_1 value before preferPrimaryImage backfills Language, so a
+// boosted textless primary keeps IncludesText=false alongside the fallback
+// language.
+func tmdbImageIncludesText(language string) *bool {
+	norm := imageLanguage(language)
+	result := norm != "" && norm != "xx"
+	return &result
 }
 
 // ---------------------------------------------------------------------------
@@ -687,6 +725,19 @@ func imageLanguage(lang string) string {
 	return norm
 }
 
+func tmdbImageLanguages(lang string) string {
+	requested := strings.TrimSpace(lang)
+	languages := make([]string, 0, 3)
+	if requested != "" {
+		languages = append(languages, requested)
+	}
+	if baseLanguage(requested) != "en" {
+		languages = append(languages, "en")
+	}
+	languages = append(languages, "null")
+	return strings.Join(languages, ",")
+}
+
 func preferPrimaryImage(
 	images []metadata.RemoteImage,
 	imageType metadata.ImageType,
@@ -713,17 +764,22 @@ func preferPrimaryImage(
 
 	if primaryIdx >= 0 {
 		images[primaryIdx].Rating = bestRating + 1
+		// Display fallback only: IncludesText was already derived from the raw
+		// iso_639_1 tag and must not be recomputed from this backfilled value.
 		if images[primaryIdx].Language == "" && language != "" {
 			images[primaryIdx].Language = language
 		}
 		return images
 	}
 
+	// TMDB picks poster_path for the requested language, so text presence for
+	// this synthesized record follows the same language heuristic.
 	return append(images, metadata.RemoteImage{
-		URL:      primaryURL,
-		Type:     imageType,
-		Language: language,
-		Rating:   bestRating + 1,
+		URL:          primaryURL,
+		Type:         imageType,
+		Language:     language,
+		Rating:       bestRating + 1,
+		IncludesText: tmdbImageIncludesText(language),
 	})
 }
 
@@ -769,6 +825,66 @@ func convertPeople(credits *Credits) []models.ItemPerson {
 		})
 	}
 	return people
+}
+
+// videoKind normalizes a TMDB video type to Silo's lowercase snake_case kind.
+func videoKind(tmdbType string) string {
+	switch tmdbType {
+	case "Trailer":
+		return "trailer"
+	case "Teaser":
+		return "teaser"
+	case "Featurette":
+		return "featurette"
+	case "Clip":
+		return "clip"
+	case "Behind the Scenes":
+		return "behind_the_scenes"
+	case "Bloopers":
+		return "bloopers"
+	default:
+		return "other"
+	}
+}
+
+// videoSortRank orders official trailers first, then other trailers, then
+// everything else. TMDB order is preserved within each group.
+func videoSortRank(v metadata.VideoResult) int {
+	switch {
+	case v.Kind == "trailer" && v.IsOfficial:
+		return 0
+	case v.Kind == "trailer":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func convertVideos(w *VideosWrapper) []metadata.VideoResult {
+	if w == nil || len(w.Results) == 0 {
+		return nil
+	}
+	videos := make([]metadata.VideoResult, 0, len(w.Results))
+	for _, v := range w.Results {
+		if v.Key == "" || v.Site == "" {
+			continue
+		}
+		videos = append(videos, metadata.VideoResult{
+			ProviderKey: v.ID,
+			Kind:        videoKind(v.Type),
+			Site:        strings.ToLower(v.Site),
+			SiteKey:     v.Key,
+			Name:        v.Name,
+			Language:    v.ISO639_1,
+			IsOfficial:  v.Official,
+			SizeHint:    v.Size,
+			PublishedAt: v.PublishedAt,
+		})
+	}
+	sort.SliceStable(videos, func(i, j int) bool {
+		return videoSortRank(videos[i]) < videoSortRank(videos[j])
+	})
+	return videos
 }
 
 func keywordNames(records []Keyword) []string {
