@@ -1,6 +1,6 @@
 # Contributing to the TMDB Metadata Plugin
 
-The [Prairie contribution guide](https://github.com/prairie-server/.github/blob/main/CONTRIBUTING.md)
+The [Prairie contribution guide](https://github.com/prairie-server/prairie-server/blob/main/CONTRIBUTING.md)
 covers project-wide coordination, focused changes, evidence, AI disclosure, and
 pull request expectations. Those requirements apply here; this guide adds the
 plugin-specific workflow.
