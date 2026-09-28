@@ -827,7 +827,7 @@ func convertPeople(credits *Credits) []models.ItemPerson {
 	return people
 }
 
-// videoKind normalizes a TMDB video type to Silo's lowercase snake_case kind.
+// videoKind normalizes a TMDB video type to Prairie's lowercase snake_case kind.
 func videoKind(tmdbType string) string {
 	switch tmdbType {
 	case "Trailer":
