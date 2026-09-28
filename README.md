@@ -1,12 +1,22 @@
-# Prairie TMDB Plugin
+# TMDB Metadata Plugin for Prairie
 
-First-party Prairie metadata plugin backed by TMDB.
+First-party [Prairie](https://github.com/prairie-server/prairie-server) metadata plugin
+backed by The Movie Database. It provides movie, series, season, and episode
+metadata and resolves `tmdb://` artwork references.
+
+## Setup
+
+TMDB Metadata is installed as a default Prairie plugin. Enter a TMDB API key in
+the plugin's `api_key` setting, then add or enable **TMDB** in a movie or
+television library's metadata provider chain. Requests fail with a
+"missing API key" error until a key is configured.
 
 ## Dependency Model
 
 This repository consumes `github.com/prairie-server/prairie-plugin-sdk` as a normal Go module dependency. CI and release builds run with `GOWORK=off` and expect the SDK version in `go.mod` to resolve from a published semver tag.
 
-For local multi-repo development, use a temporary `replace` or a local `go.work` that points at `dev/github/prairie-plugin-sdk`. Do not commit machine-local filesystem replaces as the supported release path.
+For local multi-repository development, use a `go.work` file that points at a
+sibling SDK checkout. Do not commit machine-local filesystem replacements.
 
 ## Development
 
@@ -14,6 +24,11 @@ For local multi-repo development, use a temporary `replace` or a local `go.work`
 go test ./...
 go build .
 ```
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Matching,
+mapping, or capability changes should start as an issue.
 
 ## Attribution
 
