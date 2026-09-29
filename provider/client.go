@@ -127,7 +127,7 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 
 		// 429 Too Many Requests — respect Retry-After header.
 		if resp.StatusCode == http.StatusTooManyRequests {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if attempt < maxRetries {
 				backoff := retryAfterOrDefault(resp, attempt)
 				select {
@@ -142,7 +142,7 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 
 		// 5xx — retry with exponential backoff.
 		if resp.StatusCode >= 500 {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if attempt < maxRetries {
 				backoff := time.Duration(1<<attempt) * time.Second
 				select {
@@ -158,7 +158,7 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 		// 4xx — client error, no retry.
 		if resp.StatusCode >= 400 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			var apiErr apiError
 			if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.StatusMessage != "" {
 				return fmt.Errorf("tmdb: HTTP %d: %s", resp.StatusCode, apiErr.StatusMessage)
@@ -168,7 +168,7 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 
 		// 2xx — decode response.
 		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(dest)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if decodeErr != nil {
 			return fmt.Errorf("tmdb: decode response: %w", decodeErr)
 		}
