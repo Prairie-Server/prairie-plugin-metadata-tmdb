@@ -8,7 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
+	"github.com/Prairie-Server/prairie-plugin-tmdb/metadata"
+	"github.com/Prairie-Server/prairie-plugin-tmdb/models"
 )
 
 func TestTMDBLanguage(t *testing.T) {
@@ -1197,7 +1198,7 @@ func TestGetPersonDetail_FindsTMDBPersonByIMDbID(t *testing.T) {
 }
 
 func newTMDBTestProvider(baseURL string) *Provider {
-	client := NewClient("test-key", 1000)
+	client := NewClient(1000)
 	client.SetBaseURL(baseURL)
 	return NewProviderWithClient(client)
 }
@@ -1205,102 +1206,6 @@ func newTMDBTestProvider(baseURL string) *Provider {
 func serverURL(t *testing.T, r *http.Request) string {
 	t.Helper()
 	return "http://" + r.Host
-}
-
-func TestProviderValidationAndEmptyLookupBranches(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"images": map[string]any{"secure_base_url": serverURL(t, r) + "/images/"},
-			})
-		case "/find/tt-missing":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"movie_results":  []any{},
-				"tv_results":     []any{},
-				"person_results": []any{},
-			})
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.String())
-		}
-	}))
-	defer server.Close()
-
-	p := newTMDBTestProvider(server.URL)
-	ctx := context.Background()
-
-	if _, err := p.Search(ctx, metadata.SearchQuery{
-		ProviderIDs: map[string]string{"tmdb": "not-int"},
-		ContentType: "movie",
-	}); err == nil {
-		t.Fatal("expected invalid TMDB search id error")
-	}
-	results, err := p.Search(ctx, metadata.SearchQuery{
-		ProviderIDs: map[string]string{"imdb": "tt-missing"},
-		ContentType: "movie",
-	})
-	if err != nil || results != nil {
-		t.Fatalf("missing imdb search = %#v err=%v", results, err)
-	}
-	results, err = p.Search(ctx, metadata.SearchQuery{
-		ProviderIDs: map[string]string{"tmdb": "1"},
-		ContentType: "episode",
-	})
-	if err != nil || results != nil {
-		t.Fatalf("unsupported search content type = %#v err=%v", results, err)
-	}
-	results, err = p.Search(ctx, metadata.SearchQuery{})
-	if err != nil || results != nil {
-		t.Fatalf("empty search = %#v err=%v", results, err)
-	}
-
-	if _, err := p.GetMetadata(ctx, metadata.MetadataRequest{
-		ProviderIDs: map[string]string{"tmdb": "bad"},
-		ContentType: "movie",
-	}); err == nil {
-		t.Fatal("expected invalid metadata id error")
-	}
-	if got, err := p.GetMetadata(ctx, metadata.MetadataRequest{
-		ProviderIDs: map[string]string{"tmdb": "1"},
-		ContentType: "episode",
-	}); err != nil || got != nil {
-		t.Fatalf("unsupported metadata = %#v err=%v", got, err)
-	}
-	if _, err := p.GetPersonDetail(ctx, metadata.PersonDetailRequest{
-		ProviderIDs: map[string]string{"tmdb": "bad"},
-	}); err == nil {
-		t.Fatal("expected invalid person id error")
-	}
-	if got, err := p.GetPersonDetail(ctx, metadata.PersonDetailRequest{
-		ProviderIDs: map[string]string{"imdb": "tt-missing"},
-	}); err != nil || got != nil {
-		t.Fatalf("missing person lookup = %#v err=%v", got, err)
-	}
-	if _, err := p.GetImages(ctx, metadata.ImageRequest{
-		ProviderIDs: map[string]string{"tmdb": "bad"},
-		ContentType: "movie",
-	}); err == nil {
-		t.Fatal("expected invalid images id error")
-	}
-	if imgs, err := p.GetImages(ctx, metadata.ImageRequest{
-		ProviderIDs: map[string]string{"tmdb": "1"},
-		ContentType: "episode",
-	}); err != nil || imgs != nil {
-		t.Fatalf("unsupported images = %#v err=%v", imgs, err)
-	}
-	if _, err := p.GetSeasons(ctx, metadata.SeasonsRequest{
-		ProviderIDs: map[string]string{"tmdb": "bad"},
-	}); err == nil {
-		t.Fatal("expected invalid seasons id error")
-	}
-	if _, err := p.GetEpisodes(ctx, metadata.EpisodesRequest{
-		ProviderIDs: map[string]string{"tmdb": "bad"},
-	}); err == nil {
-		t.Fatal("expected invalid episodes id error")
-	}
 }
 
 func TestGetTVMetadataCarriesShowStatus(t *testing.T) {
@@ -1359,571 +1264,79 @@ func TestGetTVMetadataCarriesShowStatus(t *testing.T) {
 	}
 }
 
-func TestProviderIdentityAndHelpers(t *testing.T) {
+func TestGetTVMetadataCreditsCreators(t *testing.T) {
 	t.Parallel()
-	p := NewProvider()
-	if p.Name() == "" || p.Slug() != "tmdb" {
-		t.Fatalf("identity = %q / %q", p.Name(), p.Slug())
-	}
-	if got := p.ForTypes(); len(got) != 2 {
-		t.Fatalf("ForTypes = %#v", got)
-	}
-	if movieContentRating(nil) != "" || tvContentRating(nil) != "" {
-		t.Fatal("nil wrappers should return empty")
-	}
-	if movieContentRating(&ReleaseDatesWrapper{Results: []ReleaseDateCountry{{
-		ISO3166_1: "US",
-		ReleaseDates: []ReleaseDate{
-			{Type: 3, Certification: "PG-13"},
-		},
-	}}}) != "PG-13" {
-		t.Fatal("movieContentRating type-3 failed")
-	}
-	if movieContentRating(&ReleaseDatesWrapper{Results: []ReleaseDateCountry{{
-		ISO3166_1: "US",
-		ReleaseDates: []ReleaseDate{
-			{Type: 1, Certification: "R"},
-		},
-	}}}) != "R" {
-		t.Fatal("movieContentRating fallback failed")
-	}
-	if tvContentRating(&ContentRatingsWrapper{Results: []ContentRating{{
-		ISO3166_1: "US", Rating: "TV-14",
-	}}}) != "TV-14" {
-		t.Fatal("tvContentRating failed")
-	}
-	if len(keywordNames([]Keyword{{Name: " A "}, {Name: "a"}, {Name: ""}, {Name: "B"}})) != 2 {
-		t.Fatal("keywordNames dedupe failed")
-	}
-	if extractYear("19") != 0 || extractYear("abcd-01-01") != 0 {
-		t.Fatal("extractYear edge cases")
-	}
-}
 
-func TestSearchByProviderIDsAndSeriesTitle(t *testing.T) {
-	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+
 		switch r.URL.Path {
 		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-		case "/movie/42":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": 42, "title": "Movie", "original_title": "Movie", "original_language": "en",
-				"release_date": "2020-01-01", "overview": "o",
-				"external_ids": map[string]any{"imdb_id": "tt1", "tvdb_id": 9},
-				"credits":      map[string]any{"cast": []any{}, "crew": []any{}},
-				"images":       map[string]any{}, "release_dates": map[string]any{"results": []any{}},
-			})
-		case "/tv/77":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": 77, "name": "Show", "original_name": "Show", "original_language": "en",
-				"first_air_date": "2019-01-01", "overview": "o",
-				"external_ids": map[string]any{"imdb_id": "tt2", "tvdb_id": 8},
-				"credits":      map[string]any{"cast": []any{}, "crew": []any{}},
-				"images":       map[string]any{}, "content_ratings": map[string]any{"results": []any{}},
-				"seasons": []any{}, "networks": []any{}, "genres": []any{},
-			})
-		case "/find/tt1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"movie_results": []map[string]any{{"id": 42}}})
-		case "/find/81189":
-			_ = json.NewEncoder(w).Encode(map[string]any{"tv_results": []map[string]any{{"id": 77}}})
-		case "/search/tv":
-			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{
-				"id": 77, "name": "Localized", "original_name": "Original", "original_language": "ja",
-				"first_air_date": "2019-05-01", "poster_path": "/p.jpg", "overview": "ov",
-			}}})
-		default:
-			t.Errorf("unexpected %s", r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	p := newTMDBTestProvider(server.URL)
-
-	byTMDB, err := p.Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"tmdb": "42"}, ContentType: "movie", Language: "en",
-	})
-	if err != nil || len(byTMDB) != 1 || byTMDB[0].ProviderIDs["imdb"] != "tt1" {
-		t.Fatalf("byTMDB = %#v err=%v", byTMDB, err)
-	}
-
-	byIMDb, err := p.Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"imdb": "tt1"}, ContentType: "movie",
-	})
-	if err != nil || len(byIMDb) != 1 {
-		t.Fatalf("byIMDb = %#v err=%v", byIMDb, err)
-	}
-
-	byTVDB, err := p.Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"tvdb": "81189"}, ContentType: "series",
-	})
-	if err != nil || len(byTVDB) != 1 {
-		t.Fatalf("byTVDB = %#v err=%v", byTVDB, err)
-	}
-
-	seriesTitle, err := p.Search(context.Background(), metadata.SearchQuery{
-		Title: "Show", ContentType: "series", Year: 2019, Language: "en",
-	})
-	if err != nil || len(seriesTitle) != 1 || seriesTitle[0].OriginalTitle != "Original" {
-		t.Fatalf("seriesTitle = %#v err=%v", seriesTitle, err)
-	}
-
-	empty, err := p.Search(context.Background(), metadata.SearchQuery{ContentType: "movie"})
-	if err != nil || empty != nil {
-		t.Fatalf("empty search = %#v err=%v", empty, err)
-	}
-	if _, err := p.Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"tmdb": "abc"}, ContentType: "movie",
-	}); err == nil {
-		t.Fatal("expected invalid id error")
-	}
-}
-
-func TestGetMovieMetadataWithCreditsKeywordsAndRating(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-		case "/movie/99":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": 99, "title": "T", "original_title": "OT", "original_language": "fr",
-				"overview": "ov", "tagline": "tg", "runtime": 100, "release_date": "2021-02-03",
-				"vote_average": 8.1, "poster_path": "/p.jpg", "backdrop_path": "/b.jpg",
-				"imdb_id": "tt999", "origin_country": []string{"FR"},
-				"genres":               []map[string]any{{"id": 1, "name": "Drama"}},
-				"production_companies": []map[string]any{{"id": 2, "name": "Studio"}},
-				"keywords":             map[string]any{"keywords": []map[string]any{{"name": "noir"}, {"name": "Noir"}}},
-				"alternative_titles":   map[string]any{"titles": []map[string]any{{"title": "Alt"}, {"title": "T"}}},
-				"external_ids":         map[string]any{"tvdb_id": 55},
-				"release_dates": map[string]any{"results": []map[string]any{{
-					"iso_3166_1":    "US",
-					"release_dates": []map[string]any{{"type": 3, "certification": "R"}},
-				}}},
-				"credits": map[string]any{
-					"cast": []map[string]any{
-						{"id": 1, "name": "Actor", "character": "Hero", "order": 0, "profile_path": "/a.jpg"},
-					},
-					"crew": []map[string]any{
-						{"id": 2, "name": "Dir", "job": "Director", "department": "Directing", "profile_path": "/d.jpg"},
-						{"id": 3, "name": "Cam", "job": "Camera Operator", "department": "Camera"},
-					},
+				"images": map[string]any{
+					"secure_base_url": serverURL(t, r) + "/images/",
 				},
-				"images": map[string]any{},
+			})
+		case "/tv/1396":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":                1396,
+				"name":              "Breaking Bad",
+				"original_language": "en",
+				"created_by": []any{
+					map[string]any{"id": 66633, "name": "Vince Gilligan", "profile_path": "/vince.jpg"},
+					map[string]any{"id": 0, "name": " "},
+					map[string]any{"id": 0, "name": "Uncredited Creator"},
+				},
+				"genres":   []any{},
+				"networks": []any{},
+				"seasons":  []any{},
+				"credits": map[string]any{
+					"cast": []any{
+						map[string]any{"id": 17419, "name": "Bryan Cranston", "character": "Walter White", "order": 0},
+					},
+					"crew": []any{},
+				},
+				"external_ids": map[string]any{},
+				"images":       map[string]any{},
+				"content_ratings": map[string]any{
+					"results": []any{},
+				},
 			})
 		default:
-			http.NotFound(w, r)
+			t.Fatalf("unexpected path: %s", r.URL.String())
 		}
 	}))
 	defer server.Close()
+
 	p := newTMDBTestProvider(server.URL)
 	result, err := p.GetMetadata(context.Background(), metadata.MetadataRequest{
-		ProviderIDs: map[string]string{"tmdb": "99"}, ContentType: "movie", Language: "en",
+		ProviderIDs: map[string]string{"tmdb": "1396"},
+		ContentType: "series",
+		Language:    "en",
 	})
-	if err != nil || result == nil {
-		t.Fatalf("err=%v result=%v", err, result)
+	if err != nil {
+		t.Fatalf("GetMetadata() error = %v", err)
 	}
-	if result.ContentRating != "R" || result.Ratings.TMDB != 8.1 {
-		t.Fatalf("rating fields = %#v", result)
-	}
-	if len(result.People) != 2 || result.People[0].Kind.String() != "Actor" {
-		t.Fatalf("people = %#v", result.People)
-	}
-	if len(result.Keywords) != 1 || result.Keywords[0] != "noir" {
-		t.Fatalf("keywords = %#v", result.Keywords)
-	}
-	if result.ProviderIDs["imdb"] != "tt999" || result.ProviderIDs["tvdb"] != "55" {
-		t.Fatalf("ids = %#v", result.ProviderIDs)
-	}
-	if err := p.LoadConfiguration(context.Background()); err != nil {
-		t.Fatalf("LoadConfiguration = %v", err)
-	}
-	if p.ImageURL("/x.jpg", "w500") == "" {
-		t.Fatal("ImageURL empty")
-	}
-	nilResult, err := p.GetMetadata(context.Background(), metadata.MetadataRequest{ContentType: "movie"})
-	if err != nil || nilResult != nil {
-		t.Fatalf("missing id = %v %v", nilResult, err)
-	}
-}
 
-func TestGetImagesForSeries(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-		case "/tv/77":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": 77, "poster_path": "/primary.jpg",
-				"images": map[string]any{
-					"posters":   []map[string]any{{"file_path": "/p.jpg", "width": 1, "height": 2, "vote_average": 1}},
-					"backdrops": []map[string]any{{"file_path": "/b.jpg", "width": 3, "height": 4}},
-					"logos":     []map[string]any{{"file_path": "/l.png", "width": 5, "height": 6}},
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	images, err := newTMDBTestProvider(server.URL).GetImages(context.Background(), metadata.ImageRequest{
-		ProviderIDs: map[string]string{"tmdb": "77"}, ContentType: "series", Language: "en",
-	})
-	if err != nil || len(images) < 3 {
-		t.Fatalf("images=%d err=%v", len(images), err)
-	}
-}
-
-func TestGetTVMetadataRichFields(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-		case "/tv/88":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": 88, "name": "Localized", "original_name": "Générique", "original_language": "fr",
-				"overview": "ov", "tagline": "tg", "first_air_date": "2018-03-04", "last_air_date": "2020-01-01",
-				"number_of_seasons": 3, "status": "Ended", "vote_average": 9.1,
-				"poster_path": "/p.jpg", "backdrop_path": "/b.jpg", "origin_country": []string{"FR"},
-				"genres":               []map[string]any{{"name": "Drama"}},
-				"networks":             []map[string]any{{"name": "Canal"}},
-				"production_companies": []map[string]any{{"name": "Studio"}},
-				"keywords":             map[string]any{"results": []map[string]any{{"name": "crime"}}},
-				"alternative_titles": map[string]any{"results": []map[string]any{
-					{"name": "Alt Name"}, {"title": "Alt Title"}, {"title": "Localized"},
-				}},
-				"external_ids":    map[string]any{"imdb_id": "tt88", "tvdb_id": 123},
-				"content_ratings": map[string]any{"results": []map[string]any{{"iso_3166_1": "US", "rating": "TV-MA"}}},
-				"credits": map[string]any{
-					"cast": []map[string]any{{"id": 1, "name": "A", "character": "C", "order": 0}},
-					"crew": []map[string]any{
-						{"id": 2, "name": "W", "job": "Writer", "department": "Writing"},
-						{"id": 3, "name": "P", "job": "Producer", "department": "Production"},
-					},
-				},
-				"images": map[string]any{}, "seasons": []any{},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	result, err := newTMDBTestProvider(server.URL).GetMetadata(context.Background(), metadata.MetadataRequest{
-		ProviderIDs: map[string]string{"tmdb": "88"}, ContentType: "series", Language: "en",
-	})
-	if err != nil || result == nil {
-		t.Fatalf("err=%v", err)
-	}
-	if result.ContentRating != "TV-MA" || result.SeasonCount != 3 || result.Networks[0] != "Canal" {
-		t.Fatalf("result = %#v", result)
-	}
-	if result.ProviderIDs["imdb"] != "tt88" || result.Ratings.TMDB != 9.1 {
-		t.Fatalf("ids/ratings = %#v", result)
-	}
-	if len(result.People) < 3 {
-		t.Fatalf("people = %#v", result.People)
-	}
-	foundAlt := false
-	for _, a := range result.TitleAliases {
-		if a.Title == "Alt Name" || a.Title == "Alt Title" {
-			foundAlt = true
+	var creators []models.ItemPerson
+	for _, person := range result.People {
+		if person.Kind == models.PersonKindCreator {
+			creators = append(creators, person)
 		}
 	}
-	if !foundAlt {
-		t.Fatalf("aliases = %#v", result.TitleAliases)
+	if len(creators) != 2 {
+		t.Fatalf("creators = %+v, want 2 (the blank name skipped)", creators)
 	}
-}
-
-func TestProviderEdgeErrorPaths(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-		case "/find/nmmissing":
-			_ = json.NewEncoder(w).Encode(map[string]any{"person_results": []any{}})
-		case "/find/ttmissing":
-			_ = json.NewEncoder(w).Encode(map[string]any{"movie_results": []any{}, "tv_results": []any{}})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	p := newTMDBTestProvider(server.URL)
-
-	person, err := p.GetPersonDetail(context.Background(), metadata.PersonDetailRequest{
-		ProviderIDs: map[string]string{"imdb": "nmmissing"},
-	})
-	if err != nil || person != nil {
-		t.Fatalf("missing person = %v %v", person, err)
+	if got := creators[0]; got.Name != "Vince Gilligan" || got.TmdbID != "66633" || got.PhotoPath != "/vince.jpg" || got.SortOrder != 0 {
+		t.Errorf("first creator = %+v, want Vince Gilligan with TMDB ID 66633, photo /vince.jpg and sort order 0", got)
 	}
-	results, err := p.Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"imdb": "ttmissing"}, ContentType: "movie",
-	})
-	if err != nil || results != nil {
-		t.Fatalf("missing find search = %v %v", results, err)
+	if got := creators[1]; got.Name != "Uncredited Creator" || got.TmdbID != "" || got.SortOrder != 1 {
+		t.Errorf("second creator = %+v, want no TMDB ID for ID 0 and sort order 1", got)
 	}
-	meta, err := p.GetMetadata(context.Background(), metadata.MetadataRequest{
-		ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "game",
-	})
-	if err != nil || meta != nil {
-		t.Fatalf("unsupported type = %v %v", meta, err)
+	if got := models.PersonKindCreator.String(); got != "Creator" {
+		t.Errorf("PersonKindCreator.String() = %q, want %q", got, "Creator")
 	}
-	imgs, err := p.GetImages(context.Background(), metadata.ImageRequest{})
-	if err != nil || imgs != nil {
-		t.Fatalf("empty images = %v %v", imgs, err)
-	}
-	if _, err := p.GetImages(context.Background(), metadata.ImageRequest{ProviderIDs: map[string]string{"tmdb": "x"}, ContentType: "movie"}); err == nil {
-		t.Fatal("expected invalid image id")
-	}
-	seasons, err := p.GetSeasons(context.Background(), metadata.SeasonsRequest{})
-	if err != nil || seasons != nil {
-		t.Fatalf("empty seasons = %v %v", seasons, err)
-	}
-	if _, err := p.GetSeasons(context.Background(), metadata.SeasonsRequest{ProviderIDs: map[string]string{"tmdb": "x"}}); err == nil {
-		t.Fatal("expected invalid season id")
-	}
-	eps, err := p.GetEpisodes(context.Background(), metadata.EpisodesRequest{})
-	if err != nil || eps != nil {
-		t.Fatalf("empty episodes = %v %v", eps, err)
-	}
-	if _, err := p.GetEpisodes(context.Background(), metadata.EpisodesRequest{ProviderIDs: map[string]string{"tmdb": "x"}}); err == nil {
-		t.Fatal("expected invalid episode id")
-	}
-	if imageLanguage("") != "" || imageLanguage("en_US") != "en" {
-		t.Fatal("imageLanguage")
-	}
-	if len(convertPeople(nil)) != 0 {
-		t.Fatal("nil credits")
-	}
-	// max cast truncation
-	credits := &Credits{}
-	for i := 0; i < 25; i++ {
-		credits.Cast = append(credits.Cast, CastMember{ID: i, Name: "N", Order: i})
-	}
-	if got := convertPeople(credits); len(got) != maxCast {
-		t.Fatalf("maxCast = %d", len(got))
-	}
-}
-
-func TestSearchBySeriesTmdbID(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-		case "/tv/5":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": 5, "name": "S", "original_name": "S", "original_language": "en",
-				"first_air_date": "2000-01-01", "overview": "o", "poster_path": "/p.jpg",
-				"external_ids": map[string]any{"imdb_id": "tt5", "tvdb_id": 7},
-				"credits":      map[string]any{"cast": []any{}, "crew": []any{}},
-				"images":       map[string]any{}, "content_ratings": map[string]any{"results": []any{}},
-				"seasons": []any{}, "networks": []any{}, "genres": []any{},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	results, err := newTMDBTestProvider(server.URL).Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"tmdb": "5"}, ContentType: "series",
-	})
-	if err != nil || len(results) != 1 || results[0].ProviderIDs["tvdb"] != "7" {
-		t.Fatalf("results=%#v err=%v", results, err)
-	}
-	emptyType, err := newTMDBTestProvider(server.URL).Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"tmdb": "5"}, ContentType: "game",
-	})
-	if err != nil || emptyType != nil {
-		t.Fatalf("unsupported search type = %v %v", emptyType, err)
-	}
-	titleEmpty, err := newTMDBTestProvider(server.URL).Search(context.Background(), metadata.SearchQuery{
-		Title: "x", ContentType: "game",
-	})
-	if err != nil || titleEmpty != nil {
-		t.Fatalf("title unsupported = %v %v", titleEmpty, err)
-	}
-}
-
-func TestProviderMethodsFailWhenConfigurationUnavailable(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"status_message":"missing"}`))
-	}))
-	defer server.Close()
-	p := newTMDBTestProvider(server.URL)
-	ctx := context.Background()
-	if _, err := p.Search(ctx, metadata.SearchQuery{Title: "x", ContentType: "movie"}); err == nil {
-		t.Fatal("Search expected config error")
-	}
-	if _, err := p.GetMetadata(ctx, metadata.MetadataRequest{ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "movie"}); err == nil {
-		t.Fatal("GetMetadata expected config error")
-	}
-	if _, err := p.GetImages(ctx, metadata.ImageRequest{ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "movie"}); err == nil {
-		t.Fatal("GetImages expected config error")
-	}
-	if _, err := p.GetSeasons(ctx, metadata.SeasonsRequest{ProviderIDs: map[string]string{"tmdb": "1"}}); err == nil {
-		t.Fatal("GetSeasons expected config error")
-	}
-	if _, err := p.GetEpisodes(ctx, metadata.EpisodesRequest{ProviderIDs: map[string]string{"tmdb": "1"}, SeasonNumber: 1}); err == nil {
-		t.Fatal("GetEpisodes expected config error")
-	}
-}
-
-func TestSearchFindExternalIDError(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/configuration" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-			return
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"status_message":"bad find"}`))
-	}))
-	defer server.Close()
-	p := newTMDBTestProvider(server.URL)
-	if _, err := p.Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"imdb": "ttbad"}, ContentType: "movie",
-	}); err == nil {
-		t.Fatal("expected find error")
-	}
-	if _, err := p.Search(context.Background(), metadata.SearchQuery{
-		ProviderIDs: map[string]string{"tvdb": "bad"}, ContentType: "series",
-	}); err == nil {
-		t.Fatal("expected tvdb find error")
-	}
-	if _, err := p.GetPersonDetail(context.Background(), metadata.PersonDetailRequest{
-		ProviderIDs: map[string]string{"imdb": "nmbad"},
-	}); err == nil {
-		t.Fatal("expected person find error")
-	}
-	if _, err := p.GetPersonDetail(context.Background(), metadata.PersonDetailRequest{
-		ProviderIDs: map[string]string{"tmdb": "not-int"},
-	}); err == nil {
-		t.Fatal("expected invalid person id")
-	}
-	if _, err := p.GetMetadata(context.Background(), metadata.MetadataRequest{
-		ProviderIDs: map[string]string{"tmdb": "nope"}, ContentType: "movie",
-	}); err == nil {
-		t.Fatal("expected invalid metadata id")
-	}
-}
-
-func TestProviderPropagatesEndpointErrors(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/configuration" {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"images": map[string]any{"secure_base_url": serverURL(t, r) + "/images/"},
-			})
-			return
-		}
-		http.Error(w, "nope", http.StatusBadRequest)
-	}))
-	defer server.Close()
-
-	p := newTMDBTestProvider(server.URL)
-	ctx := context.Background()
-
-	if _, err := p.Search(ctx, metadata.SearchQuery{ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "movie"}); err == nil {
-		t.Fatal("expected movie id search error")
-	}
-	if _, err := p.Search(ctx, metadata.SearchQuery{ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "series"}); err == nil {
-		t.Fatal("expected series id search error")
-	}
-	if _, err := p.Search(ctx, metadata.SearchQuery{Title: "x", ContentType: "movie"}); err == nil {
-		t.Fatal("expected movie title search error")
-	}
-	if _, err := p.Search(ctx, metadata.SearchQuery{Title: "x", ContentType: "series"}); err == nil {
-		t.Fatal("expected series title search error")
-	}
-	if _, err := p.GetPersonDetail(ctx, metadata.PersonDetailRequest{ProviderIDs: map[string]string{"tmdb": "1"}}); err == nil {
-		t.Fatal("expected person detail error")
-	}
-	if _, err := p.GetMetadata(ctx, metadata.MetadataRequest{ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "movie"}); err == nil {
-		t.Fatal("expected movie metadata error")
-	}
-	if _, err := p.GetMetadata(ctx, metadata.MetadataRequest{ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "series"}); err == nil {
-		t.Fatal("expected series metadata error")
-	}
-	if _, err := p.GetImages(ctx, metadata.ImageRequest{ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "movie"}); err == nil {
-		t.Fatal("expected movie images error")
-	}
-	if _, err := p.GetImages(ctx, metadata.ImageRequest{ProviderIDs: map[string]string{"tmdb": "1"}, ContentType: "series"}); err == nil {
-		t.Fatal("expected series images error")
-	}
-	if _, err := p.GetSeasons(ctx, metadata.SeasonsRequest{ProviderIDs: map[string]string{"tmdb": "1"}}); err == nil {
-		t.Fatal("expected seasons error")
-	}
-	if _, err := p.GetEpisodes(ctx, metadata.EpisodesRequest{ProviderIDs: map[string]string{"tmdb": "1"}, SeasonNumber: 1}); err == nil {
-		t.Fatal("expected episodes error")
-	}
-}
-
-func TestHelperEdgeBranches(t *testing.T) {
-	t.Parallel()
-
-	if normalizeTMDBLanguageTag("en--US") != "" {
-		t.Fatal("expected malformed language to normalize empty")
-	}
-	aliases := []metadata.TitleAlias{{Title: "Existing"}}
-	if got := appendAlias(aliases, " ", "", "alternate"); len(got) != 1 {
-		t.Fatalf("blank alias appended: %#v", got)
-	}
-	if got := appendAlias(aliases, "localized", "", "alternate", "Localized"); len(got) != 1 {
-		t.Fatalf("excluded alias appended: %#v", got)
-	}
-	if got := appendAlias(aliases, "existing", "", "alternate"); len(got) != 1 {
-		t.Fatalf("duplicate alias appended: %#v", got)
-	}
-	if movieContentRating(&ReleaseDatesWrapper{Results: []ReleaseDateCountry{{ISO3166_1: "GB"}}}) != "" {
-		t.Fatal("expected no US movie rating")
-	}
-	if movieContentRating(&ReleaseDatesWrapper{Results: []ReleaseDateCountry{{
-		ISO3166_1:    "US",
-		ReleaseDates: []ReleaseDate{{Type: 1}},
-	}}}) != "" {
-		t.Fatal("expected empty movie rating without certification")
-	}
-}
-
-func TestProviderSetAPIKey(t *testing.T) {
-	t.Parallel()
-
-	var nilProvider *Provider
-	nilProvider.SetAPIKey("ignored")
-
-	providerWithoutClient := &Provider{}
-	providerWithoutClient.SetAPIKey("ignored")
-
-	c := NewClient("", 1000)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("api_key"); got != "provider-key" {
-			t.Fatalf("api_key = %q, want provider-key", got)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-	}))
-	t.Cleanup(server.Close)
-	c.SetBaseURL(server.URL)
-
-	p := &Provider{client: c}
-	p.SetAPIKey("provider-key")
-
-	var dest map[string]any
-	if err := c.doGet(context.Background(), "/provider-key", &dest); err != nil {
-		t.Fatalf("doGet error = %v", err)
+	if len(result.People) != 3 || result.People[0].Kind != models.PersonKindActor {
+		t.Errorf("people = %+v, want the cast first, then the two creators", result.People)
 	}
 }

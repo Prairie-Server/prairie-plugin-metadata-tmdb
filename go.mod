@@ -1,14 +1,16 @@
-module github.com/prairie-server/prairie-plugin-metadata-tmdb
+module github.com/Prairie-Server/prairie-plugin-tmdb
 
 go 1.26.0
 
 require (
-	github.com/prairie-server/prairie-plugin-sdk v0.12.1-0.20260828014014-de2fc8135237
 	golang.org/x/time v0.14.0
 	google.golang.org/protobuf v1.36.11
 )
 
+require google.golang.org/grpc v1.83.2 // indirect
+
 require (
+	github.com/Prairie-Server/prairie-plugin-sdk v0.15.0
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
@@ -21,5 +23,4 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/grpc v1.83.2 // indirect
 )

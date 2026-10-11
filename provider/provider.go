@@ -3,13 +3,12 @@ package provider
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
-	"github.com/prairie-server/prairie-plugin-metadata-tmdb/models"
+	"github.com/Prairie-Server/prairie-plugin-tmdb/metadata"
+	"github.com/Prairie-Server/prairie-plugin-tmdb/models"
 )
 
 const defaultTMDBLanguage = "en-US"
@@ -132,8 +131,7 @@ type Provider struct {
 
 // NewProvider creates a TMDB provider using the built-in project API key.
 func NewProvider() *Provider {
-	apiKey := strings.TrimSpace(os.Getenv("TMDB_API_KEY"))
-	return &Provider{client: NewClient(apiKey, 40)}
+	return &Provider{client: NewClient(40)}
 }
 
 // NewProviderWithClient creates a TMDB provider with a pre-configured client.
@@ -144,14 +142,6 @@ func NewProviderWithClient(c *Client) *Provider {
 func (p *Provider) Slug() string       { return "tmdb" }
 func (p *Provider) Name() string       { return "The Movie Database" }
 func (p *Provider) ForTypes() []string { return []string{"movie", "series"} }
-
-// SetAPIKey updates the TMDB API key used by the provider's client.
-func (p *Provider) SetAPIKey(key string) {
-	if p == nil || p.client == nil {
-		return
-	}
-	p.client.SetAPIKey(key)
-}
 
 // ---------------------------------------------------------------------------
 // SearchProvider
@@ -442,6 +432,7 @@ func (p *Provider) getMovieMetadata(ctx context.Context, id int, lang string) (*
 
 	if movie.VoteAverage > 0 {
 		result.Ratings.TMDB = movie.VoteAverage
+		result.Ratings.TMDBVotes = movie.VoteCount
 	}
 
 	for _, g := range movie.Genres {
@@ -503,6 +494,7 @@ func (p *Provider) getTVMetadata(ctx context.Context, id int, lang string) (*met
 
 	if tv.VoteAverage > 0 {
 		result.Ratings.TMDB = tv.VoteAverage
+		result.Ratings.TMDBVotes = tv.VoteCount
 	}
 
 	for _, g := range tv.Genres {
@@ -524,7 +516,7 @@ func (p *Provider) getTVMetadata(ctx context.Context, id int, lang string) (*met
 	result.PosterPath = tv.PosterPath
 	result.BackdropPath = tv.BackdropPath
 
-	result.People = convertPeople(tv.Credits)
+	result.People = append(convertPeople(tv.Credits), creatorPeople(tv.CreatedBy)...)
 	result.Videos = convertVideos(tv.Videos)
 
 	return result, nil
@@ -822,6 +814,31 @@ func convertPeople(credits *Credits) []models.ItemPerson {
 				PhotoPath: tmdbProfileImageURL(cm.ProfilePath),
 			},
 			Kind: models.PersonKindFromJob(cm.Job),
+		})
+	}
+	return people
+}
+
+// creatorPeople credits a series' creators. TMDB lists them on the show
+// itself (created_by), not in its credits, so convertPeople never sees them.
+func creatorPeople(creators []Creator) []models.ItemPerson {
+	people := make([]models.ItemPerson, 0, len(creators))
+	for _, c := range creators {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			continue
+		}
+		person := models.Person{
+			Name:      name,
+			PhotoPath: tmdbProfileImageURL(c.ProfilePath),
+		}
+		if c.ID > 0 {
+			person.TmdbID = strconv.Itoa(c.ID)
+		}
+		people = append(people, models.ItemPerson{
+			Person:    person,
+			Kind:      models.PersonKindCreator,
+			SortOrder: len(people),
 		})
 	}
 	return people

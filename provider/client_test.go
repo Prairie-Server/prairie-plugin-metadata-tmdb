@@ -1,650 +1,460 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
-	"time"
+
+	"github.com/Prairie-Server/prairie-plugin-tmdb/metadata"
 )
 
-func TestNewClientDefaultRateLimit(t *testing.T) {
-	t.Parallel()
-	if c := NewClient("key", 0); c == nil {
-		t.Fatal("expected client")
-	}
+const testAPIKey = "secret-test-key"
+
+func newKeyedTestClient(baseURL string) *Client {
+	client := NewClient(1000)
+	client.apiKey = testAPIKey
+	client.SetBaseURL(baseURL)
+	return client
 }
 
-func TestClientSetAPIKey(t *testing.T) {
-	t.Parallel()
-
-	c := NewClient("", 1000)
-	c.SetAPIKey("updated-key")
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("api_key"); got != "updated-key" {
-			t.Fatalf("api_key = %q, want updated-key", got)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-	}))
-	t.Cleanup(server.Close)
-	c.SetBaseURL(server.URL)
-
-	var dest map[string]any
-	if err := c.doGet(context.Background(), "/configured", &dest); err != nil {
-		t.Fatalf("doGet error = %v", err)
-	}
-}
-
-func TestClientDoGetMissingAPIKey(t *testing.T) {
-	t.Parallel()
-
-	c := NewClient("", 1000)
-	var dest map[string]any
-	err := c.doGet(context.Background(), "/missing-key", &dest)
+func assertNoAPIKey(t *testing.T, err error) {
+	t.Helper()
 	if err == nil {
-		t.Fatal("expected missing API key error")
+		t.Fatal("expected an error")
 	}
-	if !strings.Contains(err.Error(), "missing API key") {
-		t.Fatalf("error = %v, want missing API key", err)
+	message := err.Error()
+	for _, secret := range []string{testAPIKey, defaultAPIKey} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("error carries %q: %v", secret, err)
+		}
 	}
 }
 
-func TestClientImageURL(t *testing.T) {
-	t.Parallel()
-	c := NewClient("test-key", 1000)
-	c.imageBase = "https://image.tmdb.org/t/p/"
-	if got := c.ImageURL("", "w500"); got != "" {
-		t.Fatalf("empty path = %q", got)
+// refusingTransport refuses every request to refusedHost as a dial would, and
+// sends any other request through http.DefaultTransport. An empty refusedHost
+// refuses everything. It keeps transport-error tests independent of whether a
+// closed loopback port has been handed out again.
+type refusingTransport struct {
+	refusedHost string
+}
+
+func (t refusingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.refusedHost == "" || req.URL.Host == t.refusedHost {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
 	}
-	if got := c.ImageURL("/poster.jpg", "w500"); got != "https://image.tmdb.org/t/p/w500/poster.jpg" {
-		t.Fatalf("ImageURL = %q", got)
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func TestTransportErrorsLeaveOutTheAPIKey(t *testing.T) {
+	t.Parallel()
+
+	const baseURL = "http://tmdb.test"
+	client := newKeyedTestClient(baseURL)
+	client.httpClient.Transport = refusingTransport{}
+	p := NewProviderWithClient(client)
+
+	_, err := p.Search(context.Background(), metadata.SearchQuery{Title: "Movie", ContentType: "movie"})
+	assertNoAPIKey(t, err)
+	if !strings.Contains(err.Error(), "tmdb: load config: tmdb: request failed:") {
+		t.Fatalf("error lost its context: %v", err)
+	}
+
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("error %v does not wrap a *url.Error", err)
+	}
+	if want := baseURL + "/configuration?api_key=REDACTED"; urlErr.URL != want {
+		t.Fatalf("error URL = %q, want %q", urlErr.URL, want)
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("error %v no longer wraps the transport *net.OpError", err)
 	}
 }
 
-func TestClientDoGetErrorPaths(t *testing.T) {
+func TestTransportErrorKeepsTheRequestQuery(t *testing.T) {
 	t.Parallel()
 
-	t.Run("4xx with api message", func(t *testing.T) {
-		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status_message": "The resource you requested could not be found.",
-			})
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		var dest map[string]any
-		err := c.doGet(context.Background(), "/missing", &dest)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	})
+	const baseURL = "http://tmdb.test"
+	client := newKeyedTestClient(baseURL)
+	client.httpClient.Transport = refusingTransport{}
 
-	t.Run("4xx without message", func(t *testing.T) {
-		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte("not-json"))
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		var dest map[string]any
-		if err := c.doGet(context.Background(), "/bad", &dest); err == nil {
-			t.Fatal("expected error")
-		}
-	})
+	var dest map[string]any
+	err := client.doGet(context.Background(), "/search/movie?query=Alien&year=1979&page=2", &dest)
+	assertNoAPIKey(t, err)
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("error %v does not wrap a *url.Error", err)
+	}
+	if want := baseURL + "/search/movie?query=Alien&year=1979&page=2&api_key=REDACTED"; urlErr.URL != want {
+		t.Fatalf("error URL = %q, want %q", urlErr.URL, want)
+	}
+}
 
-	t.Run("decode error", func(t *testing.T) {
-		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte("{"))
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		var dest map[string]any
-		if err := c.doGet(context.Background(), "/bad-json", &dest); err == nil {
-			t.Fatal("expected decode error")
-		}
-	})
+func TestRedactURL(t *testing.T) {
+	t.Parallel()
 
-	t.Run("429 then success", func(t *testing.T) {
-		t.Parallel()
-		var calls atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			n := calls.Add(1)
-			if n == 1 {
-				w.Header().Set("Retry-After", "1")
-				w.WriteHeader(http.StatusTooManyRequests)
-				return
+	tests := []struct {
+		name, in, want string
+	}{
+		{"no query", "https://api.themoviedb.org/3/configuration", "https://api.themoviedb.org/3/configuration"},
+		{"key only", "https://api.themoviedb.org/3/configuration?api_key=" + testAPIKey, "https://api.themoviedb.org/3/configuration?api_key=REDACTED"},
+		{"key last", "/3/find/tt0078748?external_source=imdb_id&api_key=" + testAPIKey, "/3/find/tt0078748?external_source=imdb_id&api_key=REDACTED"},
+		{"key first", "/3/search/tv?api_key=" + testAPIKey + "&query=Andor", "/3/search/tv?api_key=REDACTED&query=Andor"},
+		{"fragment dropped", "/3/movie/1?api_key=" + testAPIKey + "#" + testAPIKey, "/3/movie/1?api_key=REDACTED"},
+		{"key elsewhere", "/3/" + testAPIKey + "/x?query=a", "/3/REDACTED/x?query=a"},
+		{"unparseable", "/3/movie/%zz?api_key=" + testAPIKey, "/3/movie/%zz?api_key=REDACTED"},
+		{"escaped name and value", "/3/movie/1?%61pi_key=%73ecret-test-key&page=2", "/3/movie/1?api_key=REDACTED&page=2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := redactURL(tt.in, testAPIKey); got != tt.want {
+				t.Fatalf("redactURL(%q) = %q, want %q", tt.in, got, tt.want)
 			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		var dest map[string]any
-		start := time.Now()
-		if err := c.doGet(context.Background(), "/retry", &dest); err != nil {
-			t.Fatalf("doGet error = %v", err)
-		}
-		if time.Since(start) < time.Second {
-			t.Fatal("expected Retry-After backoff")
-		}
-	})
-
-	t.Run("429 canceled during wait", func(t *testing.T) {
-		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Retry-After", "30")
-			w.WriteHeader(http.StatusTooManyRequests)
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		var dest map[string]any
-		if err := c.doGet(ctx, "/rate", &dest); err == nil {
-			t.Fatal("expected canceled error")
-		}
-	})
-
-	t.Run("5xx canceled during wait", func(t *testing.T) {
-		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusBadGateway)
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		var dest map[string]any
-		if err := c.doGet(ctx, "/500", &dest); err == nil {
-			t.Fatal("expected canceled error")
-		}
-	})
-
-	t.Run("path already has query", func(t *testing.T) {
-		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Query().Get("api_key") == "" {
-				t.Fatal("missing api_key")
-			}
-			if r.URL.Query().Get("page") != "2" {
-				t.Fatalf("page = %q", r.URL.Query().Get("page"))
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		var dest map[string]any
-		if err := c.doGet(context.Background(), "/x?page=2", &dest); err != nil {
-			t.Fatalf("doGet error = %v", err)
-		}
-	})
-
-	t.Run("invalid request url", func(t *testing.T) {
-		t.Parallel()
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL("http://example.com/%zz")
-		var dest map[string]any
-		if err := c.doGet(context.Background(), "", &dest); err == nil {
-			t.Fatal("expected request creation error")
-		}
-	})
-
-	t.Run("request failure", func(t *testing.T) {
-		t.Parallel()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-		url := server.URL
-		server.Close()
-		c := NewClient("test-key", 1000)
-		c.httpClient.Timeout = 50 * time.Millisecond
-		c.SetBaseURL(url)
-		var dest map[string]any
-		if err := c.doGet(context.Background(), "/down", &dest); err == nil {
-			t.Fatal("expected request failure")
-		}
-	})
-}
-
-func TestClientEndpointErrorReturns(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusBadRequest)
-	}))
-	t.Cleanup(server.Close)
-
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-
-	if _, err := c.SearchMovie(context.Background(), "x", 0, "en-US"); err == nil {
-		t.Fatal("expected SearchMovie error")
-	}
-	if _, err := c.SearchTV(context.Background(), "x", 0, "en-US"); err == nil {
-		t.Fatal("expected SearchTV error")
-	}
-	if _, err := c.GetMovie(context.Background(), 1, "en-US"); err == nil {
-		t.Fatal("expected GetMovie error")
-	}
-	if _, err := c.GetTV(context.Background(), 1, "en-US"); err == nil {
-		t.Fatal("expected GetTV error")
-	}
-	if _, err := c.GetPerson(context.Background(), 1, "en-US"); err == nil {
-		t.Fatal("expected GetPerson error")
-	}
-	if _, err := c.GetSeason(context.Background(), 1, 1, "en-US"); err == nil {
-		t.Fatal("expected GetSeason error")
-	}
-}
-
-func TestClientCollectionAndTrendingErrorBranches(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusBadRequest)
-	}))
-	t.Cleanup(server.Close)
-
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-
-	if _, err := c.GetTrending(context.Background(), "movie", "day", 5); err == nil {
-		t.Fatal("expected trending error")
-	}
-	if _, err := c.GetCollectionPreset(context.Background(), "trending", "movie", "day", 5); err == nil {
-		t.Fatal("expected trending preset error")
-	}
-	if _, err := c.GetCollectionPreset(context.Background(), "top_rated", "tv", "", 5); err == nil {
-		t.Fatal("expected tv preset error")
-	}
-	if _, err := c.GetCollectionPreset(context.Background(), "upcoming", "movie", "", 5); err == nil {
-		t.Fatal("expected movie preset error")
-	}
-	if _, err := c.GetCollectionPreset(context.Background(), "on_the_air", "tv", "", 5); err == nil {
-		t.Fatal("expected on_the_air preset error")
-	}
-}
-
-func TestClientCollectionPresetOversizedFirstPageIsTrimmed(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"page":        1,
-			"total_pages": 1,
-			"results": []map[string]any{
-				{"id": 1, "title": "A"},
-				{"id": 2, "title": "B"},
-				{"id": 3, "title": "C"},
-			},
 		})
-	}))
-	t.Cleanup(server.Close)
-
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-	results, err := c.GetCollectionPreset(context.Background(), "popular", "movie", "", 2)
-	if err != nil {
-		t.Fatalf("GetCollectionPreset error = %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("len(results) = %d, want 2", len(results))
 	}
 }
 
-func TestClientGetTrending(t *testing.T) {
+func TestCanceledRequestErrorKeepsItsCause(t *testing.T) {
+	t.Parallel()
+
+	arrived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := newKeyedTestClient(server.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-arrived
+		cancel()
+	}()
+
+	err := client.loadConfiguration(ctx)
+	assertNoAPIKey(t, err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestRedirectTransportErrorLeavesOutTheAPIKey(t *testing.T) {
+	t.Parallel()
+
+	const refusedHost = "refused.test"
+	target := "http://" + refusedHost + "/configuration?api_key=" + testAPIKey
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target, http.StatusFound)
+	}))
+	defer server.Close()
+
+	client := newKeyedTestClient(server.URL)
+	client.httpClient.Transport = refusingTransport{refusedHost: refusedHost}
+	err := client.loadConfiguration(context.Background())
+	assertNoAPIKey(t, err)
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("error %v no longer wraps the transport *net.OpError", err)
+	}
+}
+
+func TestMalformedRedirectLocationLeavesOutTheAPIKey(t *testing.T) {
+	t.Parallel()
+
+	// net/http cannot parse this Location and quotes it in the error text.
+	location := "/3/configuration/%zz?api_key=" + testAPIKey
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", location)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer server.Close()
+
+	err := newKeyedTestClient(server.URL).loadConfiguration(context.Background())
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), testAPIKey) {
+		t.Fatalf("error carries the API key: %v", err)
+	}
+	if !strings.Contains(err.Error(), "api_key=REDACTED") {
+		t.Fatalf("error lost the masked Location: %v", err)
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("error %v does not wrap a *url.Error", err)
+	}
+	if want := server.URL + "/configuration?api_key=REDACTED"; urlErr.URL != want {
+		t.Fatalf("error URL = %q, want %q", urlErr.URL, want)
+	}
+}
+
+func TestCreateRequestErrorLeavesOutTheAPIKey(t *testing.T) {
+	t.Parallel()
+
+	// An unclosed IPv6 literal makes url.Parse fail inside
+	// http.NewRequestWithContext, which echoes the URL it rejected.
+	err := newKeyedTestClient("http://[::1").loadConfiguration(context.Background())
+	assertNoAPIKey(t, err)
+	if !strings.Contains(err.Error(), "tmdb: create request:") {
+		t.Fatalf("error lost its context: %v", err)
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("error %v does not wrap a *url.Error", err)
+	}
+}
+
+func TestStatusErrorLeavesOutTheAPIKey(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/trending/movie/day":
-			page := r.URL.Query().Get("page")
-			if page == "1" || page == "" {
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"page": 1, "total_pages": 2,
-					"results": []map[string]any{
-						{"id": 1, "title": "One", "media_type": "movie"},
-						{"id": 2, "title": "Two", "media_type": "movie"},
-					},
-				})
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"status_code":7,"status_message":"Invalid API key: You must be granted a valid key."}`))
+	}))
+	defer server.Close()
+
+	err := newKeyedTestClient(server.URL).loadConfiguration(context.Background())
+	assertNoAPIKey(t, err)
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("error lost its status: %v", err)
+	}
+}
+
+func TestLoadConfigurationConcurrentFirstCalls(t *testing.T) {
+	t.Parallel()
+
+	var fetches atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"images":{"secure_base_url":"https://image.tmdb.org/t/p/"}}`))
+	}))
+	defer server.Close()
+
+	const want = "https://image.tmdb.org/t/p/w500/poster.jpg"
+	client := newKeyedTestClient(server.URL)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			// Half the callers load first, as a metadata request does; the
+			// rest only build image URLs, which can overlap the first load.
+			if i%2 == 0 {
+				if err := client.loadConfiguration(context.Background()); err != nil {
+					t.Errorf("loadConfiguration: %v", err)
+				} else if got := client.ImageURL("/poster.jpg", "w500"); got != want {
+					t.Errorf("ImageURL after loadConfiguration = %q, want %q", got, want)
+				}
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"page": 2, "total_pages": 2,
-				"results": []map[string]any{
-					{"id": 3, "title": "Three", "media_type": "movie"},
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
+			_ = client.ImageURL("/poster.jpg", "w500")
+		}()
+	}
+	close(start)
+	wg.Wait()
 
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-
-	if _, err := c.GetTrending(context.Background(), "invalid", "day", 10); err == nil {
-		t.Fatal("expected invalid media type error")
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("/configuration fetched %d times, want 1", got)
 	}
-	if _, err := c.GetTrending(context.Background(), "movie", "year", 10); err == nil {
-		t.Fatal("expected invalid time window error")
-	}
-
-	results, err := c.GetTrending(context.Background(), "movie", "day", 0)
-	if err != nil {
-		t.Fatalf("GetTrending error = %v", err)
-	}
-	if len(results) != 3 {
-		t.Fatalf("len(results) = %d, want 3", len(results))
-	}
-
-	limited, err := c.GetTrending(context.Background(), "movie", "day", 2)
-	if err != nil {
-		t.Fatalf("GetTrending limited error = %v", err)
-	}
-	if len(limited) != 2 {
-		t.Fatalf("len(limited) = %d, want 2", len(limited))
-	}
-
-	capped, err := c.GetTrending(context.Background(), "movie", "day", 1000)
-	if err != nil {
-		t.Fatalf("GetTrending capped error = %v", err)
-	}
-	if len(capped) != 3 {
-		t.Fatalf("len(capped) = %d, want 3", len(capped))
+	if got := client.ImageURL("/poster.jpg", "w500"); got != want {
+		t.Fatalf("ImageURL = %q, want %q", got, want)
 	}
 }
 
-func TestClientGetCollectionPreset(t *testing.T) {
+func TestLoadConfigurationRetriesAfterAFailure(t *testing.T) {
 	t.Parallel()
 
+	var fetches atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/trending/all/week":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"page": 1, "total_pages": 1,
-				"results": []map[string]any{
-					{"id": 1, "title": "Movie Title", "media_type": "movie"},
-					{"id": 2, "name": "TV Name", "media_type": "tv"},
-				},
-			})
-		case "/movie/popular":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"page": 1, "total_pages": 1,
-				"results": []map[string]any{{"id": 10, "title": "Popular Movie"}},
-			})
-		case "/tv/top_rated":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"page": 1, "total_pages": 1,
-				"results": []map[string]any{{"id": 20, "name": "Top TV"}},
-			})
-		case "/movie/now_playing":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"page": 1, "total_pages": 1,
-				"results": []map[string]any{{"id": 30, "title": "Now Playing"}},
-			})
-		case "/tv/airing_today":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"page": 1, "total_pages": 1,
-				"results": []map[string]any{{"id": 40, "name": "Airing"}},
-			})
-		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-
-	if _, err := c.GetCollectionPreset(context.Background(), "nope", "movie", "", 5); err == nil {
-		t.Fatal("expected invalid preset")
-	}
-
-	trending, err := c.GetCollectionPreset(context.Background(), "trending", "all", "week", 0)
-	if err != nil {
-		t.Fatalf("trending error = %v", err)
-	}
-	if len(trending) != 2 || trending[0].Title != "Movie Title" || trending[1].Title != "TV Name" {
-		t.Fatalf("trending = %#v", trending)
-	}
-
-	popular, err := c.GetCollectionPreset(context.Background(), "popular", "movie", "", 5)
-	if err != nil {
-		t.Fatalf("popular error = %v", err)
-	}
-	if len(popular) != 1 || popular[0].MediaType != "movie" {
-		t.Fatalf("popular = %#v", popular)
-	}
-
-	tvTop, err := c.GetCollectionPreset(context.Background(), "top_rated", "tv", "", 5)
-	if err != nil {
-		t.Fatalf("tv top error = %v", err)
-	}
-	if len(tvTop) != 1 || tvTop[0].Title != "Top TV" {
-		t.Fatalf("tvTop = %#v", tvTop)
-	}
-
-	nowPlaying, err := c.GetCollectionPreset(context.Background(), "now_playing", "movie", "", 5)
-	if err != nil {
-		t.Fatalf("now_playing error = %v", err)
-	}
-	if len(nowPlaying) != 1 {
-		t.Fatalf("nowPlaying = %#v", nowPlaying)
-	}
-
-	airing, err := c.GetCollectionPreset(context.Background(), "airing_today", "tv", "", 5)
-	if err != nil {
-		t.Fatalf("airing_today error = %v", err)
-	}
-	if len(airing) != 1 {
-		t.Fatalf("airing = %#v", airing)
-	}
-
-	if _, _, _, _, err := normalizeCollectionPreset("trending", "person", "day"); err == nil {
-		t.Fatal("expected trending media type error")
-	}
-	if _, _, _, _, err := normalizeCollectionPreset("trending", "movie", "month"); err == nil {
-		t.Fatal("expected trending window error")
-	}
-	if _, _, _, _, err := normalizeCollectionPreset("popular", "all", ""); err == nil {
-		t.Fatal("expected popular media type error")
-	}
-	if _, _, _, _, err := normalizeCollectionPreset("now_playing", "tv", ""); err == nil {
-		t.Fatal("expected now_playing media type error")
-	}
-	if _, _, _, _, err := normalizeCollectionPreset("on_the_air", "movie", ""); err == nil {
-		t.Fatal("expected on_the_air media type error")
-	}
-	preset, media, window, path, err := normalizeCollectionPreset("upcoming", "movie", "")
-	if err != nil || preset != "upcoming" || media != "movie" || window != "" || path != "/movie/upcoming" {
-		t.Fatalf("upcoming normalize = %q %q %q %q %v", preset, media, window, path, err)
-	}
-	_, _, _, path, err = normalizeCollectionPreset("on_the_air", "tv", "")
-	if err != nil || path != "/tv/on_the_air" {
-		t.Fatalf("on_the_air path = %q err=%v", path, err)
-	}
-}
-
-func TestClientSearchTV(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/search/tv" {
-			http.NotFound(w, r)
+		if fetches.Add(1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"status_code":7,"status_message":"Invalid API key"}`))
 			return
 		}
-		if r.URL.Query().Get("first_air_date_year") != "2001" {
-			t.Fatalf("year = %q", r.URL.Query().Get("first_air_date_year"))
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"results": []map[string]any{{"id": 77, "name": "Series"}},
-		})
+		_, _ = w.Write([]byte(`{"images":{"secure_base_url":"https://image.tmdb.org/t/p/"}}`))
 	}))
-	t.Cleanup(server.Close)
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-	results, err := c.SearchTV(context.Background(), "Series", 2001, "en-US")
+	defer server.Close()
+
+	client := newKeyedTestClient(server.URL)
+	if err := client.loadConfiguration(context.Background()); err == nil {
+		t.Fatal("first loadConfiguration succeeded, want the HTTP 401 error")
+	}
+	for range 2 {
+		if err := client.loadConfiguration(context.Background()); err != nil {
+			t.Fatalf("loadConfiguration after a failure: %v", err)
+		}
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("/configuration fetched %d times, want 2", got)
+	}
+	if got, want := client.ImageURL("/poster.jpg", "w500"), "https://image.tmdb.org/t/p/w500/poster.jpg"; got != want {
+		t.Fatalf("ImageURL = %q, want %q", got, want)
+	}
+}
+
+func TestRedactURLErrorRedactsNestedURLErrors(t *testing.T) {
+	t.Parallel()
+
+	// net/http does not nest a *url.Error; this covers the defensive branch.
+	cause := errors.New("connection refused")
+	err := redactURLError(&url.Error{
+		Op:  "Get",
+		URL: "https://api.themoviedb.org/3/configuration?api_key=" + testAPIKey,
+		Err: &url.Error{
+			Op:  "Get",
+			URL: "https://redirect.example/3/configuration?api_key=" + testAPIKey + "#fragment",
+			Err: cause,
+		},
+	}, testAPIKey)
+
+	assertNoAPIKey(t, err)
+	want := `Get "https://api.themoviedb.org/3/configuration?api_key=REDACTED": Get "https://redirect.example/3/configuration?api_key=REDACTED": connection refused`
+	if err.Error() != want {
+		t.Fatalf("redacted error = %q, want %q", err.Error(), want)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("redacted error %v lost its cause", err)
+	}
+}
+
+func TestRedactURLErrorPassesOtherErrorsThrough(t *testing.T) {
+	t.Parallel()
+
+	if err := redactURLError(nil, testAPIKey); err != nil {
+		t.Fatalf("redactURLError(nil) = %v, want nil", err)
+	}
+	if err := redactURLError(context.DeadlineExceeded, testAPIKey); err != context.DeadlineExceeded { //nolint:errorlint // identity is the point
+		t.Fatalf("redactURLError changed a non-URL error: %v", err)
+	}
+}
+
+// longSeasonJSON returns a TMDB season response that holds every episode of a
+// long-running series in one season, as TMDB does for some shows. Each
+// episode carries a full overview and one crew and guest credit.
+func longSeasonJSON(t *testing.T, episodeCount int) []byte {
+	t.Helper()
+
+	overview := strings.Repeat("The family gathers for news that changes everything. ", 12)
+	season := SeasonDetail{ID: 7001, Name: "Season 1", SeasonNumber: 1, AirDate: "2001-01-01"}
+	for n := 1; n <= episodeCount; n++ {
+		season.Episodes = append(season.Episodes, EpisodeDetail{
+			ID:            100000 + n,
+			Name:          fmt.Sprintf("Episode %d", n),
+			Overview:      overview,
+			AirDate:       "2001-01-01",
+			EpisodeNumber: n,
+			SeasonNumber:  1,
+			Runtime:       22,
+			VoteAverage:   7.5,
+			VoteCount:     3,
+			StillPath:     fmt.Sprintf("/still%06d.jpg", n),
+			ShowID:        7000,
+			Crew:          []CrewMember{{ID: 1, Name: "A Director", Job: "Director", Department: "Directing"}},
+			GuestStars:    []CastMember{{ID: 2, Name: "A Guest", Character: "A Visitor"}},
+		})
+	}
+	body, err := json.Marshal(season)
 	if err != nil {
-		t.Fatalf("SearchTV error = %v", err)
+		t.Fatalf("marshal season: %v", err)
 	}
-	if len(results) != 1 || results[0].ID != 77 {
-		t.Fatalf("results = %#v", results)
-	}
+	return body
 }
 
-func TestClientRetryAfterInvalidHeaderAnd5xxSuccess(t *testing.T) {
+// TestGetSeasonDecodesSeasonsOverOneMegabyte covers a season whose response is
+// larger than the old 1 MB cap, which cut the body short and failed with
+// "decode response: unexpected EOF".
+func TestGetSeasonDecodesSeasonsOverOneMegabyte(t *testing.T) {
 	t.Parallel()
 
-	t.Run("invalid retry-after", func(t *testing.T) {
-		t.Parallel()
-		var calls atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if calls.Add(1) == 1 {
-				w.Header().Set("Retry-After", "nope")
-				w.WriteHeader(http.StatusTooManyRequests)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		var dest map[string]any
-		if err := c.doGet(context.Background(), "/r", &dest); err != nil {
-			t.Fatalf("err=%v", err)
-		}
-	})
-
-	t.Run("5xx then success", func(t *testing.T) {
-		t.Parallel()
-		var calls atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if calls.Add(1) == 1 {
-				w.WriteHeader(http.StatusBadGateway)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-		}))
-		t.Cleanup(server.Close)
-		c := NewClient("test-key", 1000)
-		c.SetBaseURL(server.URL)
-		var dest map[string]any
-		if err := c.doGet(context.Background(), "/5", &dest); err != nil {
-			t.Fatalf("err=%v", err)
-		}
-	})
-}
-
-func TestClientGetCollectionPresetPaginationAndUpcoming(t *testing.T) {
-	t.Parallel()
+	const episodeCount = 2000
+	body := longSeasonJSON(t, episodeCount)
+	if len(body) <= 1<<20 {
+		t.Fatalf("fixture is %d bytes, want over 1 MB", len(body))
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/movie/upcoming":
-			page := r.URL.Query().Get("page")
-			if page == "1" || page == "" {
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"page": 1, "total_pages": 2,
-					"results": []map[string]any{{"id": 1, "title": "A"}, {"id": 2, "title": "B"}},
-				})
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	season, err := newKeyedTestClient(server.URL).GetSeason(context.Background(), 7000, 1, "en-US")
+	if err != nil {
+		t.Fatalf("GetSeason(%d-byte season): %v", len(body), err)
+	}
+	if got := len(season.Episodes); got != episodeCount {
+		t.Fatalf("got %d episodes, want %d", got, episodeCount)
+	}
+	last := season.Episodes[episodeCount-1]
+	if last.EpisodeNumber != episodeCount || last.StillPath != "/still002000.jpg" || len(last.GuestStars) != 1 {
+		t.Fatalf("last episode decoded wrongly: %+v", last)
+	}
+}
+
+// TestResponseSizeCap checks both sides of the cap with valid JSON: a body of
+// exactly maxResponseBody bytes decodes, and one byte more fails as too large
+// on the first request instead of being decoded truncated.
+func TestResponseSizeCap(t *testing.T) {
+	t.Parallel()
+
+	season := []byte(`{"id":7001,"season_number":1,"episodes":[]}`)
+	for _, tc := range []struct {
+		name     string
+		size     int
+		tooLarge bool
+	}{
+		{name: "at the cap", size: maxResponseBody},
+		{name: "one byte over the cap", size: maxResponseBody + 1, tooLarge: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The season JSON followed by trailing whitespace, still valid.
+			body := bytes.Repeat([]byte(" "), tc.size)
+			copy(body, season)
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(body)
+			}))
+			defer server.Close()
+
+			got, err := newKeyedTestClient(server.URL).GetSeason(context.Background(), 7000, 1, "en-US")
+			if n := requests.Load(); n != 1 {
+				t.Errorf("server saw %d requests, want 1", n)
+			}
+			if !tc.tooLarge {
+				if err != nil {
+					t.Fatalf("GetSeason(%d bytes): %v", tc.size, err)
+				}
+				if got.SeasonNumber != 1 {
+					t.Fatalf("season number = %d, want 1", got.SeasonNumber)
+				}
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"page": 2, "total_pages": 2,
-				"results": []map[string]any{{"id": 3, "title": "C"}},
-			})
-		case "/tv/on_the_air":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"page": 1, "total_pages": 1,
-				"results": []map[string]any{{"id": 9, "name": "OnAir"}},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-	all, err := c.GetCollectionPreset(context.Background(), "upcoming", "movie", "", 1000)
-	if err != nil || len(all) != 3 {
-		t.Fatalf("upcoming all = %#v err=%v", all, err)
-	}
-	limited, err := c.GetCollectionPreset(context.Background(), "upcoming", "movie", "", 2)
-	if err != nil || len(limited) != 2 {
-		t.Fatalf("upcoming limited = %#v err=%v", limited, err)
-	}
-	onAir, err := c.GetCollectionPreset(context.Background(), "on_the_air", "tv", "", 5)
-	if err != nil || len(onAir) != 1 {
-		t.Fatalf("on_the_air = %#v err=%v", onAir, err)
-	}
-}
-
-func TestClientLoadConfigurationCached(t *testing.T) {
-	t.Parallel()
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://img/"}})
-	}))
-	t.Cleanup(server.Close)
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-	if err := c.loadConfiguration(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.loadConfiguration(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("calls=%d", calls.Load())
-	}
-}
-
-func TestClientDoGetCanceledBeforeRequest(t *testing.T) {
-	t.Parallel()
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL("http://127.0.0.1:1")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	var dest map[string]any
-	if err := c.doGet(ctx, "/x", &dest); err == nil {
-		t.Fatal("expected canceled")
-	}
-}
-
-func TestClientSearchMovieWithoutYear(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("year") != "" {
-			t.Fatalf("unexpected year %q", r.URL.Query().Get("year"))
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
-	}))
-	t.Cleanup(server.Close)
-	c := NewClient("test-key", 1000)
-	c.SetBaseURL(server.URL)
-	if _, err := c.SearchMovie(context.Background(), "x", 0, "en-US"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.SearchTV(context.Background(), "x", 0, "en-US"); err != nil {
-		t.Fatal(err)
+			assertNoAPIKey(t, err)
+			if !errors.Is(err, errResponseTooLarge) {
+				t.Fatalf("GetSeason(%d bytes) error = %v, want errResponseTooLarge", tc.size, err)
+			}
+		})
 	}
 }

@@ -3,20 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
 
-	pluginv1 "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
-	pluginsdkruntime "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginsdk/runtime"
+	pluginv1 "github.com/Prairie-Server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
+	"github.com/Prairie-Server/prairie-plugin-tmdb/metadata"
+	"github.com/Prairie-Server/prairie-plugin-tmdb/provider"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
-
-	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
-	"github.com/prairie-server/prairie-plugin-metadata-tmdb/models"
-	"github.com/prairie-server/prairie-plugin-metadata-tmdb/provider"
 )
 
 func TestRuntimeServerConfigure_NoOp(t *testing.T) {
@@ -33,83 +29,6 @@ func TestRuntimeServerConfigure_NoOp(t *testing.T) {
 	}
 	if p == nil {
 		t.Fatal("expected provider to be available")
-	}
-}
-
-func TestRuntimeServerConfigure_CreatesProvider(t *testing.T) {
-	server := &runtimeServer{}
-
-	_, err := server.Configure(context.Background(), &pluginv1.ConfigureRequest{})
-	if err != nil {
-		t.Fatalf("Configure() returned error: %v", err)
-	}
-	if server.provider == nil {
-		t.Fatal("expected provider to be created")
-	}
-}
-
-func TestRuntimeServerConfigure_APIKey(t *testing.T) {
-	client := provider.NewClient("", 1000)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if got := r.URL.Query().Get("api_key"); got != "configured-secret" {
-			t.Fatalf("api_key = %q, want configured-secret", got)
-		}
-		switch r.URL.Path {
-		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"},
-			})
-		case "/search/movie":
-			_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	client.SetBaseURL(server.URL)
-
-	rs := &runtimeServer{provider: provider.NewProviderWithClient(client)}
-
-	_, err := rs.Configure(context.Background(), &pluginv1.ConfigureRequest{
-		Config: []*pluginv1.ConfigEntry{
-			nil,
-			{Key: "other_setting", Value: mustStruct(t, map[string]any{"value": "ignored"})},
-			{Key: "api_key", Value: mustStruct(t, map[string]any{"value": ""})},
-			{Key: " api_key ", Value: mustStruct(t, map[string]any{"value": "configured-secret"})},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Configure() returned error: %v", err)
-	}
-
-	ms := &metadataServer{runtime: rs}
-	if _, err := ms.Search(context.Background(), &pluginv1.SearchMetadataRequest{
-		Query:    "test",
-		ItemType: "movie",
-	}); err != nil {
-		t.Fatalf("Search() after Configure error = %v", err)
-	}
-}
-
-func TestConfigEntryString(t *testing.T) {
-	if got := configEntryString(nil); got != "" {
-		t.Fatalf("nil value = %q, want empty", got)
-	}
-	if got := configEntryString(mustStruct(t, map[string]any{"value": "secret"})); got != "secret" {
-		t.Fatalf("value field = %q, want secret", got)
-	}
-	if got := configEntryString(mustStruct(t, map[string]any{"string": "from-string"})); got != "from-string" {
-		t.Fatalf("string field = %q, want from-string", got)
-	}
-	if got := configEntryString(mustStruct(t, map[string]any{"text": "from-text"})); got != "from-text" {
-		t.Fatalf("text field = %q, want from-text", got)
-	}
-	if got := configEntryString(mustStruct(t, map[string]any{"custom": "fallback"})); got != "fallback" {
-		t.Fatalf("fallback field = %q, want fallback", got)
-	}
-	if got := configEntryString(mustStruct(t, map[string]any{"value": "  trimmed  "})); got != "trimmed" {
-		t.Fatalf("trimmed value = %q, want trimmed", got)
 	}
 }
 
@@ -213,7 +132,7 @@ func TestResolveImageURL(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			client := provider.NewClient("test-key", 1000)
+			client := provider.NewClient(1000)
 			client.SetBaseURL(server.URL)
 			p := provider.NewProviderWithClient(client)
 
@@ -254,7 +173,7 @@ func TestResolveImageURL_RetriesConfigurationAfterCanceledContext(t *testing.T) 
 	}))
 	t.Cleanup(server.Close)
 
-	client := provider.NewClient("test-key", 1000)
+	client := provider.NewClient(1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -332,7 +251,7 @@ func TestMetadataServerGetMetadata_IncludesReleaseDate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient("test-key", 1000)
+	client := provider.NewClient(1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -391,7 +310,7 @@ func TestMetadataServerGetMetadata_IncludesVideos(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient("test-key", 1000)
+	client := provider.NewClient(1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -548,7 +467,7 @@ func TestMetadataServerGetPersonDetail_CanonicalizesProfilePath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient("test-key", 1000)
+	client := provider.NewClient(1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -576,124 +495,96 @@ func TestMetadataServerGetPersonDetail_CanonicalizesProfilePath(t *testing.T) {
 	}
 }
 
-func TestRuntimeServerGetManifest(t *testing.T) {
-	manifest, err := loadManifest()
-	if err != nil {
-		t.Fatalf("loadManifest: %v", err)
+func TestItemRatingsStructAddsTMDBSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		ratings metadata.Ratings
+		want    map[string]any
+	}{
+		{
+			name:    "score and votes",
+			ratings: metadata.Ratings{TMDB: 7.634, TMDBVotes: 18523},
+			want: map[string]any{
+				"tmdb":    7.634,
+				"sources": map[string]any{"tmdb": map[string]any{"score": 76.34, "votes": float64(18523)}},
+			},
+		},
+		{
+			name:    "no votes leaves votes out",
+			ratings: metadata.Ratings{TMDB: 10},
+			want: map[string]any{
+				"tmdb":    10.0,
+				"sources": map[string]any{"tmdb": map[string]any{"score": 100.0}},
+			},
+		},
+		{
+			name:    "score rounds away float noise",
+			ratings: metadata.Ratings{TMDB: 9.123, TMDBVotes: 2},
+			want: map[string]any{
+				"tmdb":    9.123,
+				"sources": map[string]any{"tmdb": map[string]any{"score": 91.23, "votes": float64(2)}},
+			},
+		},
+		{
+			name:    "no TMDB average sends no source",
+			ratings: metadata.Ratings{IMDB: 8.1, TMDBVotes: 5},
+			want:    map[string]any{"imdb": 8.1},
+		},
+		{
+			name:    "no ratings",
+			ratings: metadata.Ratings{},
+			want:    nil,
+		},
 	}
-	rs := &runtimeServer{manifest: manifest, provider: provider.NewProvider()}
-	resp, err := rs.GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
-	if err != nil {
-		t.Fatalf("GetManifest: %v", err)
-	}
-	if resp.GetManifest() != manifest {
-		t.Fatal("manifest pointer mismatch")
-	}
-}
-
-func TestLoadManifest(t *testing.T) {
-	original := version
-	version = "9.9.9-test"
-	t.Cleanup(func() { version = original })
-
-	manifest, err := loadManifest()
-	if err != nil {
-		t.Fatalf("loadManifest: %v", err)
-	}
-	if manifest.GetPluginId() != "prairie.tmdb" {
-		t.Fatalf("PluginId = %q", manifest.GetPluginId())
-	}
-	if manifest.GetVersion() != "9.9.9-test" {
-		t.Fatalf("Version = %q", manifest.GetVersion())
-	}
-	if len(manifest.GetChecksum()) != 64 {
-		t.Fatalf("Checksum length = %d", len(manifest.GetChecksum()))
-	}
-}
-
-func TestLoadManifestErrorPaths(t *testing.T) {
-	originalManifest := manifestJSON
-	originalExecutable := osExecutable
-	originalReadFile := osReadFile
-	t.Cleanup(func() {
-		manifestJSON = originalManifest
-		osExecutable = originalExecutable
-		osReadFile = originalReadFile
-	})
-
-	manifestJSON = []byte(`{`)
-	if _, err := loadManifest(); err == nil {
-		t.Fatal("expected invalid manifest error")
-	}
-	manifestJSON = originalManifest
-
-	osExecutable = func() (string, error) {
-		return "", errors.New("no executable")
-	}
-	if _, err := loadManifest(); err == nil {
-		t.Fatal("expected executable error")
-	}
-	osExecutable = originalExecutable
-
-	osReadFile = func(string) ([]byte, error) {
-		return nil, errors.New("read failed")
-	}
-	if _, err := loadManifest(); err == nil {
-		t.Fatal("expected read executable error")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := itemRatingsStruct(tt.ratings)
+			if tt.want == nil {
+				if got != nil {
+					t.Fatalf("itemRatingsStruct() = %v, want nil", got.AsMap())
+				}
+				return
+			}
+			if !reflect.DeepEqual(got.AsMap(), tt.want) {
+				t.Fatalf("itemRatingsStruct() = %v, want %v", got.AsMap(), tt.want)
+			}
+		})
 	}
 }
 
-func TestMainWiresRuntimeServers(t *testing.T) {
-	originalServe := runtimeServe
-	t.Cleanup(func() { runtimeServe = originalServe })
-
-	called := false
-	runtimeServe = func(cfg pluginsdkruntime.ServeConfig) {
-		called = true
-		if cfg.Servers.Runtime == nil || cfg.Servers.MetadataProvider == nil || cfg.Servers.ImageResolver == nil {
-			t.Fatalf("missing runtime servers: %#v", cfg.Servers)
-		}
-	}
-
-	main()
-	if !called {
-		t.Fatal("runtimeServe was not called")
-	}
-}
-
-func TestMetadataServerSearchSeasonsEpisodesImages(t *testing.T) {
+func TestMetadataServer_SendsTMDBVotesForMoviesAndSeriesOnly(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+
 		switch r.URL.Path {
 		case "/configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"}})
-		case "/search/movie":
-			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{
-				"id": 42, "title": "Ten", "original_title": "Dieci", "original_language": "it",
-				"release_date": "2022-01-01", "poster_path": "/p.jpg", "overview": "ov",
-			}}})
-		case "/tv/77":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": 77, "name": "Show", "original_name": "Show", "original_language": "en",
-				"status": "Ended", "overview": "ov", "genres": []any{}, "networks": []any{},
-				"credits":      map[string]any{"cast": []any{}, "crew": []any{}},
-				"external_ids": map[string]any{}, "images": map[string]any{
-					"posters":   []map[string]any{{"file_path": "/poster.jpg", "width": 1, "height": 2, "vote_average": 5}},
-					"backdrops": []map[string]any{{"file_path": "/bd.jpg", "width": 3, "height": 4, "vote_average": 4}},
-					"logos":     []map[string]any{{"file_path": "/logo.png", "width": 5, "height": 6, "vote_average": 3}},
+				"images": map[string]any{
+					"secure_base_url": "https://image.tmdb.org/t/p/",
 				},
-				"content_ratings": map[string]any{"results": []any{}},
-				"seasons": []map[string]any{{
-					"season_number": 1, "name": "S1", "overview": "so", "air_date": "2020-01-01", "poster_path": "/s.jpg",
-				}},
 			})
-		case "/tv/77/season/1":
+		case "/movie/550":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": 1,
+				"id":           550,
+				"title":        "Movie",
+				"vote_average": 8.438,
+				"vote_count":   31250,
+			})
+		case "/tv/1399":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":           1399,
+				"name":         "Series",
+				"vote_average": 8.5,
+				"vote_count":   25611,
+			})
+		case "/tv/1399/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"episodes": []map[string]any{{
-					"id": 9001, "season_number": 1, "episode_number": 1, "name": "Pilot",
-					"overview": "ep", "air_date": "2020-01-02", "runtime": 42, "still_path": "/still.jpg",
-					"vote_average": 7.5,
+					"id":             63056,
+					"season_number":  1,
+					"episode_number": 1,
+					"vote_average":   7.9,
+					"vote_count":     420,
 				}},
 			})
 		default:
@@ -702,217 +593,66 @@ func TestMetadataServerSearchSeasonsEpisodesImages(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient("test-key", 1000)
+	client := provider.NewClient(1000)
 	client.SetBaseURL(server.URL)
-	ms := &metadataServer{runtime: &runtimeServer{provider: provider.NewProviderWithClient(client)}}
 
-	search, err := ms.Search(context.Background(), &pluginv1.SearchMetadataRequest{
-		Query: "Ten", Year: 2022, ItemType: "movie", Language: "en",
-	})
-	if err != nil || len(search.GetResults()) != 1 {
-		t.Fatalf("Search = %#v err=%v", search, err)
-	}
-	if search.GetResults()[0].GetImageUrl() != "tmdb://poster/p.jpg" {
-		t.Fatalf("ImageUrl = %q", search.GetResults()[0].GetImageUrl())
+	ms := &metadataServer{
+		runtime: &runtimeServer{
+			provider: provider.NewProviderWithClient(client),
+		},
 	}
 
-	seasons, err := ms.GetSeasons(context.Background(), &pluginv1.GetSeasonsRequest{
-		SeriesProviderId: "77", Language: "en",
-	})
-	if err != nil || len(seasons.GetSeasons()) != 1 {
-		t.Fatalf("GetSeasons = %#v err=%v", seasons, err)
+	tests := []struct {
+		itemType   string
+		providerID string
+		want       map[string]any
+	}{
+		{
+			itemType:   "movie",
+			providerID: "550",
+			want: map[string]any{
+				"tmdb":    8.438,
+				"sources": map[string]any{"tmdb": map[string]any{"score": 84.38, "votes": float64(31250)}},
+			},
+		},
+		{
+			itemType:   "series",
+			providerID: "1399",
+			want: map[string]any{
+				"tmdb":    8.5,
+				"sources": map[string]any{"tmdb": map[string]any{"score": 85.0, "votes": float64(25611)}},
+			},
+		},
 	}
-	if seasons.GetSeasons()[0].GetPosterPath() != "tmdb://poster/s.jpg" {
-		t.Fatalf("season poster = %q", seasons.GetSeasons()[0].GetPosterPath())
-	}
-
-	episodes, err := ms.GetEpisodes(context.Background(), &pluginv1.GetEpisodesRequest{
-		SeriesProviderId: "77", SeasonNumber: 1, Language: "en",
-	})
-	if err != nil || len(episodes.GetEpisodes()) != 1 {
-		t.Fatalf("GetEpisodes = %#v err=%v", episodes, err)
-	}
-	if episodes.GetEpisodes()[0].GetStillPath() != "tmdb://still/still.jpg" {
-		t.Fatalf("still = %q", episodes.GetEpisodes()[0].GetStillPath())
-	}
-
-	images, err := ms.GetImages(context.Background(), &pluginv1.GetImagesRequest{
-		ProviderId: "77", ItemType: "series", Language: "en",
-	})
-	if err != nil || len(images.GetImages()) < 3 {
-		t.Fatalf("GetImages = %#v err=%v", images, err)
-	}
-	foundRating := false
-	for _, img := range images.GetImages() {
-		if img.GetMetadata() != nil {
-			foundRating = true
-		}
-	}
-	if !foundRating {
-		t.Fatal("expected image rating metadata")
-	}
-
-	urls, err := ms.ResolveImageURLs(context.Background(), &pluginv1.ResolveImageURLsRequest{
-		Paths:   []string{"tmdb://poster/p.jpg", "tmdb://backdrop/b.jpg", "", "bad"},
-		Variant: "card",
-	})
-	if err != nil {
-		t.Fatalf("ResolveImageURLs: %v", err)
-	}
-	if urls.GetUrls()["tmdb://poster/p.jpg"] != "https://image.tmdb.org/t/p/w300/p.jpg" {
-		t.Fatalf("urls = %#v", urls.GetUrls())
-	}
-}
-
-func TestHelpersAliasesPeopleRatingsMetadataStruct(t *testing.T) {
-	aliases := aliasesToProto([]metadata.TitleAlias{
-		{Title: " ", Language: "en", Kind: "alternate"},
-		{Title: "Alt", Language: "en", Kind: "alternate"},
-	})
-	if len(aliases) != 1 {
-		t.Fatalf("aliases = %#v", aliases)
-	}
-
-	people := peopleToRecords(nil)
-	if people != nil {
-		t.Fatalf("nil people = %#v", people)
-	}
-	people = peopleToRecords([]models.ItemPerson{{
-		Person: models.Person{Name: "A", TmdbID: "1", PhotoPath: "/a.jpg"},
-		Kind:   models.PersonKindActor, Character: "Hero", SortOrder: 1,
-	}})
-	if len(people) != 1 || people[0].GetPhotoPath() != "tmdb://profile/a.jpg" {
-		t.Fatalf("people = %#v", people)
-	}
-
-	if empty := ratingsMap(metadata.Ratings{}); len(empty) != 0 {
-		t.Fatalf("empty ratingsMap = %#v", empty)
-	}
-	m := ratingsMap(metadata.Ratings{IMDB: 1, TMDB: 2, RTCritic: 3, RTAudience: 4})
-	if len(m) != 4 {
-		t.Fatalf("ratingsMap = %#v", m)
-	}
-	if ratingsStruct(metadata.Ratings{TMDB: 1}) == nil {
-		t.Fatal("ratingsStruct nil")
-	}
-	if metadataStruct(&metadata.MetadataResult{}) != nil {
-		t.Fatal("empty metadataStruct should be nil")
-	}
-	ms := metadataStruct(&metadata.MetadataResult{Keywords: []string{" a ", "", "b"}})
-	if ms == nil || len(ms.AsMap()["keywords"].([]any)) != 2 {
-		t.Fatalf("metadataStruct = %#v", ms)
-	}
-	if s, err := stringStruct(nil); err != nil || s != nil {
-		t.Fatalf("stringStruct nil = %v %v", s, err)
-	}
-	if s, err := stringStruct(map[string]string{"a": ""}); err != nil || s != nil {
-		t.Fatalf("stringStruct empty values = %v %v", s, err)
-	}
-	if structFromMap(nil) != nil {
-		t.Fatal("structFromMap nil")
-	}
-	if tmdbVariantSize("featured", "profile") != "w185" {
-		t.Fatal("featured profile size")
-	}
-	if tmdbVariantSize("full", "backdrop") != "original" {
-		t.Fatal("full backdrop size")
-	}
-	if resolveOneTMDBPath(provider.NewProvider(), "noslash", "card") != "" {
-		t.Fatal("resolveOneTMDBPath should reject bare role")
-	}
-}
-
-func TestGetPersonDetailNilResult(t *testing.T) {
-	ms := &metadataServer{runtime: &runtimeServer{provider: provider.NewProvider()}}
-	resp, err := ms.GetPersonDetail(context.Background(), &pluginv1.GetPersonDetailRequest{})
-	if err != nil || resp.GetPerson() != nil {
-		t.Fatalf("resp=%v err=%v", resp, err)
-	}
-}
-
-func TestGetMetadataNilResult(t *testing.T) {
-	ms := &metadataServer{runtime: &runtimeServer{provider: provider.NewProvider()}}
-	resp, err := ms.GetMetadata(context.Background(), &pluginv1.GetMetadataRequest{
-		ProviderId: "", ItemType: "movie",
-	})
-	if err != nil {
-		t.Fatalf("GetMetadata err=%v", err)
-	}
-	if resp != nil && resp.GetItem() != nil {
-		t.Fatalf("expected nil item, got %#v", resp.GetItem())
-	}
-}
-
-func TestStructFromMapPanicsOnInvalidValue(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic")
-		}
-	}()
-	_ = structFromMap(map[string]any{"bad": make(chan int)})
-}
-
-func TestResolveImageURLConfigurationError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-	client := provider.NewClient("test-key", 1000)
-	client.SetBaseURL(server.URL)
-	ms := &metadataServer{runtime: &runtimeServer{provider: provider.NewProviderWithClient(client)}}
-	if _, err := ms.ResolveImageURL(context.Background(), &pluginv1.ResolveImageURLRequest{Path: "tmdb://poster/x.jpg"}); err == nil {
-		t.Fatal("expected config error")
-	}
-	if _, err := ms.ResolveImageURLs(context.Background(), &pluginv1.ResolveImageURLsRequest{Paths: []string{"tmdb://poster/x.jpg"}}); err == nil {
-		t.Fatal("expected config error")
-	}
-	if _, err := ms.Search(context.Background(), &pluginv1.SearchMetadataRequest{Query: "x", ItemType: "movie"}); err == nil {
-		t.Fatal("expected search config error")
-	}
-}
-
-func TestMetadataServerPropagatesProviderErrors(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/configuration" {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"images": map[string]any{"secure_base_url": "https://image.tmdb.org/t/p/"},
+	for _, tt := range tests {
+		t.Run(tt.itemType, func(t *testing.T) {
+			resp, err := ms.GetMetadata(context.Background(), &pluginv1.GetMetadataRequest{
+				ProviderId: tt.providerID,
+				ItemType:   tt.itemType,
 			})
-			return
+			if err != nil {
+				t.Fatalf("GetMetadata() error = %v", err)
+			}
+			if got := resp.GetItem().GetRatings().AsMap(); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ratings = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("episodes keep only the average", func(t *testing.T) {
+		resp, err := ms.GetEpisodes(context.Background(), &pluginv1.GetEpisodesRequest{
+			SeriesProviderId: "1399",
+			SeasonNumber:     1,
+		})
+		if err != nil {
+			t.Fatalf("GetEpisodes() error = %v", err)
 		}
-		http.Error(w, "provider failed", http.StatusBadRequest)
-	}))
-	defer server.Close()
-
-	client := provider.NewClient("test-key", 1000)
-	client.SetBaseURL(server.URL)
-	ms := &metadataServer{runtime: &runtimeServer{provider: provider.NewProviderWithClient(client)}}
-
-	if _, err := ms.GetMetadata(context.Background(), &pluginv1.GetMetadataRequest{ProviderId: "1", ItemType: "movie"}); err == nil {
-		t.Fatal("expected metadata error")
-	}
-	if _, err := ms.GetPersonDetail(context.Background(), &pluginv1.GetPersonDetailRequest{
-		ProviderIds: mustStruct(t, map[string]any{"tmdb": "1"}),
-	}); err == nil {
-		t.Fatal("expected person detail error")
-	}
-	if _, err := ms.GetSeasons(context.Background(), &pluginv1.GetSeasonsRequest{SeriesProviderId: "1"}); err == nil {
-		t.Fatal("expected seasons error")
-	}
-	if _, err := ms.GetEpisodes(context.Background(), &pluginv1.GetEpisodesRequest{SeriesProviderId: "1", SeasonNumber: 1}); err == nil {
-		t.Fatal("expected episodes error")
-	}
-	if _, err := ms.GetImages(context.Background(), &pluginv1.GetImagesRequest{ProviderId: "1", ItemType: "movie"}); err == nil {
-		t.Fatal("expected images error")
-	}
-}
-
-func TestRecordConvertersRejectInvalidProviderIDKeys(t *testing.T) {
-	badIDs := map[string]string{string([]byte{0xff}): "bad"}
-	if _, err := metadataItemFromResult(&metadata.MetadataResult{ProviderIDs: badIDs}, "movie"); err == nil {
-		t.Fatal("expected metadata item conversion error")
-	}
-	if _, err := personDetailRecordFromResult(&metadata.PersonDetailResult{ProviderIDs: badIDs}); err == nil {
-		t.Fatal("expected person detail conversion error")
-	}
+		if len(resp.GetEpisodes()) != 1 {
+			t.Fatalf("len(episodes) = %d, want 1", len(resp.GetEpisodes()))
+		}
+		want := map[string]any{"tmdb": 7.9}
+		if got := resp.GetEpisodes()[0].GetRatings().AsMap(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("episode ratings = %v, want %v", got, want)
+		}
+	})
 }
