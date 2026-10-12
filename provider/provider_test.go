@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Prairie-Server/prairie-plugin-tmdb/metadata"
-	"github.com/Prairie-Server/prairie-plugin-tmdb/models"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/models"
 )
 
 func TestTMDBLanguage(t *testing.T) {
@@ -1198,7 +1198,7 @@ func TestGetPersonDetail_FindsTMDBPersonByIMDbID(t *testing.T) {
 }
 
 func newTMDBTestProvider(baseURL string) *Provider {
-	client := NewClient(1000)
+	client := NewClient("test-key", 1000)
 	client.SetBaseURL(baseURL)
 	return NewProviderWithClient(client)
 }

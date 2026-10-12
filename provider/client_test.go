@@ -16,14 +16,13 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/Prairie-Server/prairie-plugin-tmdb/metadata"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
 )
 
 const testAPIKey = "secret-test-key"
 
 func newKeyedTestClient(baseURL string) *Client {
-	client := NewClient(1000)
-	client.apiKey = testAPIKey
+	client := NewClient(testAPIKey, 1000)
 	client.SetBaseURL(baseURL)
 	return client
 }
@@ -34,7 +33,7 @@ func assertNoAPIKey(t *testing.T, err error) {
 		t.Fatal("expected an error")
 	}
 	message := err.Error()
-	for _, secret := range []string{testAPIKey, defaultAPIKey} {
+	for _, secret := range []string{testAPIKey} {
 		if strings.Contains(message, secret) {
 			t.Fatalf("error carries %q: %v", secret, err)
 		}
@@ -456,5 +455,38 @@ func TestResponseSizeCap(t *testing.T) {
 				t.Fatalf("GetSeason(%d bytes) error = %v, want errResponseTooLarge", tc.size, err)
 			}
 		})
+	}
+}
+
+func TestClientDoGetMissingAPIKey(t *testing.T) {
+	t.Parallel()
+
+	c := NewClient("", 1000)
+	var dest map[string]any
+	err := c.doGet(context.Background(), "/missing-key", &dest)
+	if err == nil || !strings.Contains(err.Error(), "missing API key") {
+		t.Fatalf("error = %v, want missing API key", err)
+	}
+}
+
+func TestProviderSetAPIKeyKeysRequests(t *testing.T) {
+	t.Parallel()
+
+	var got atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.URL.Query().Get("api_key"))
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	c := NewClient("", 1000)
+	c.SetBaseURL(srv.URL)
+	NewProviderWithClient(c).SetAPIKey("configured-key")
+	var dest map[string]any
+	if err := c.doGet(context.Background(), "/configuration", &dest); err != nil {
+		t.Fatalf("doGet: %v", err)
+	}
+	if got.Load() != "configured-key" {
+		t.Fatalf("api_key = %v, want configured-key", got.Load())
 	}
 }

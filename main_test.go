@@ -8,11 +8,12 @@ import (
 	"reflect"
 	"testing"
 
-	pluginv1 "github.com/Prairie-Server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
-	"github.com/Prairie-Server/prairie-plugin-tmdb/metadata"
-	"github.com/Prairie-Server/prairie-plugin-tmdb/provider"
+	pluginv1 "github.com/prairie-server/prairie-plugin-sdk/pkg/pluginproto/prairie/plugin/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/metadata"
+	"github.com/prairie-server/prairie-plugin-metadata-tmdb/provider"
 )
 
 func TestRuntimeServerConfigure_NoOp(t *testing.T) {
@@ -132,7 +133,7 @@ func TestResolveImageURL(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			client := provider.NewClient(1000)
+			client := provider.NewClient("test-key", 1000)
 			client.SetBaseURL(server.URL)
 			p := provider.NewProviderWithClient(client)
 
@@ -173,7 +174,7 @@ func TestResolveImageURL_RetriesConfigurationAfterCanceledContext(t *testing.T) 
 	}))
 	t.Cleanup(server.Close)
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -251,7 +252,7 @@ func TestMetadataServerGetMetadata_IncludesReleaseDate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -310,7 +311,7 @@ func TestMetadataServerGetMetadata_IncludesVideos(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -467,7 +468,7 @@ func TestMetadataServerGetPersonDetail_CanonicalizesProfilePath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
@@ -593,7 +594,7 @@ func TestMetadataServer_SendsTMDBVotesForMoviesAndSeriesOnly(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := provider.NewClient(1000)
+	client := provider.NewClient("test-key", 1000)
 	client.SetBaseURL(server.URL)
 
 	ms := &metadataServer{
