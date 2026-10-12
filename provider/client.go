@@ -19,7 +19,6 @@ import (
 
 const (
 	defaultBaseURL  = "https://api.themoviedb.org/3"
-	defaultAPIKey   = "9c18082d4985d4a204bc88af823a6353"
 	maxRetries      = 3
 	maxResponseBody = 16 << 20 // 16 MiB, room for a season of thousands of episodes
 	maxErrorBody    = 1 << 20  // 1 MiB
@@ -34,6 +33,7 @@ var errResponseTooLarge = errors.New("tmdb: response too large")
 type Client struct {
 	httpClient *http.Client
 	apiKey     string
+	apiKeyMu   sync.RWMutex
 	baseURL    string
 	imageBase  atomic.Pointer[string] // cached from /configuration
 	limiter    *rate.Limiter
@@ -41,14 +41,26 @@ type Client struct {
 }
 
 // NewClient creates a TMDB API client with the given rate limit (requests per
-// second). It uses the built-in project API key.
-func NewClient(rateLimit int) *Client {
+// second) and apiKey.
+//
+// If apiKey is empty, requests fail with a clear "missing API key" error.
+func NewClient(apiKey string, rateLimit int) *Client {
+	if rateLimit <= 0 {
+		rateLimit = 50
+	}
 	return &Client{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
-		apiKey:     defaultAPIKey,
+		apiKey:     apiKey,
 		baseURL:    defaultBaseURL,
 		limiter:    rate.NewLimiter(rate.Limit(rateLimit), rateLimit),
 	}
+}
+
+// SetAPIKey updates the TMDB API key used by requests.
+func (c *Client) SetAPIKey(key string) {
+	c.apiKeyMu.Lock()
+	c.apiKey = key
+	c.apiKeyMu.Unlock()
 }
 
 // SetBaseURL overrides the API base URL. Used for testing.
@@ -106,28 +118,35 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 		return err
 	}
 
+	c.apiKeyMu.RLock()
+	apiKey := strings.TrimSpace(c.apiKey)
+	c.apiKeyMu.RUnlock()
+	if apiKey == "" {
+		return fmt.Errorf("tmdb: missing API key (configure TMDB_API_KEY or api_key)")
+	}
+
 	// Append api_key query parameter for TMDB v3 authentication.
 	sep := "?"
 	if strings.Contains(path, "?") {
 		sep = "&"
 	}
-	reqURL := c.baseURL + path + sep + "api_key=" + url.QueryEscape(c.apiKey)
+	reqURL := c.baseURL + path + sep + "api_key=" + url.QueryEscape(apiKey)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 		if err != nil {
-			return fmt.Errorf("tmdb: create request: %w", redactURLError(err, c.apiKey))
+			return fmt.Errorf("tmdb: create request: %w", redactURLError(err, apiKey))
 		}
 		req.Header.Set("Accept", "application/json")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			return fmt.Errorf("tmdb: request failed: %w", redactURLError(err, c.apiKey))
+			return fmt.Errorf("tmdb: request failed: %w", redactURLError(err, apiKey))
 		}
 
 		// 429 Too Many Requests — respect Retry-After header.
 		if resp.StatusCode == http.StatusTooManyRequests {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if attempt < maxRetries {
 				backoff := retryAfterOrDefault(resp, attempt)
 				select {
@@ -142,7 +161,7 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 
 		// 5xx — retry with exponential backoff.
 		if resp.StatusCode >= 500 {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if attempt < maxRetries {
 				backoff := time.Duration(1<<attempt) * time.Second
 				select {
@@ -158,7 +177,7 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 		// 4xx — client error, no retry.
 		if resp.StatusCode >= 400 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			var apiErr apiError
 			if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.StatusMessage != "" {
 				return fmt.Errorf("tmdb: HTTP %d: %s", resp.StatusCode, apiErr.StatusMessage)
@@ -170,7 +189,7 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 		// Reading one byte past the cap tells an oversized body apart from
 		// one that ends exactly at it, so it is never decoded truncated.
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if readErr != nil {
 			return fmt.Errorf("tmdb: read response: %w", readErr)
 		}
