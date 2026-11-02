@@ -485,30 +485,32 @@ func (c *Client) GetCollectionPreset(ctx context.Context, preset, mediaType, tim
 	return results, nil
 }
 
-// SearchMovie searches TMDB for movies matching the query.
-func (c *Client) SearchMovie(ctx context.Context, query string, year int, language string) ([]MovieResult, error) {
+// SearchMovie searches TMDB for movies matching the query. It returns the
+// first page and whether that page holds every result.
+func (c *Client) SearchMovie(ctx context.Context, query string, year int, language string) ([]MovieResult, bool, error) {
 	path := "/search/movie?query=" + url.QueryEscape(query) + "&language=" + url.QueryEscape(language)
 	if year > 0 {
 		path += "&year=" + strconv.Itoa(year)
 	}
 	var resp paginatedResponse[MovieResult]
 	if err := c.doGet(ctx, path, &resp); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return resp.Results, nil
+	return resp.Results, resp.TotalPages <= 1, nil
 }
 
-// SearchTV searches TMDB for TV shows matching the query.
-func (c *Client) SearchTV(ctx context.Context, query string, year int, language string) ([]TVResult, error) {
+// SearchTV searches TMDB for TV shows matching the query. It returns the
+// first page and whether that page holds every result.
+func (c *Client) SearchTV(ctx context.Context, query string, year int, language string) ([]TVResult, bool, error) {
 	path := "/search/tv?query=" + url.QueryEscape(query) + "&language=" + url.QueryEscape(language)
 	if year > 0 {
 		path += "&first_air_date_year=" + strconv.Itoa(year)
 	}
 	var resp paginatedResponse[TVResult]
 	if err := c.doGet(ctx, path, &resp); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return resp.Results, nil
+	return resp.Results, resp.TotalPages <= 1, nil
 }
 
 // FindByExternalID looks up a TMDB entity by an external ID (e.g. IMDb,
@@ -525,12 +527,12 @@ func (c *Client) FindByExternalID(ctx context.Context, externalID, source string
 // GetMovie fetches full movie details with credits, external IDs, images,
 // keywords, release dates, and videos appended in a single API call.
 // The lang parameter is an ISO 639-1 code (e.g. "en", "ja") passed as
-// ?language= and &include_image_language= to get localized metadata and images.
-// Videos fall back to English and language-less entries because TMDB only
-// returns videos matching the request language by default.
+// ?language= to get localized metadata. Images and videos fall back to
+// English and language-less entries because TMDB only returns those matching
+// the request language by default.
 func (c *Client) GetMovie(ctx context.Context, id int, lang string) (*MovieDetail, error) {
-	path := fmt.Sprintf("/movie/%d?append_to_response=credits,external_ids,images,keywords,release_dates,alternative_titles,videos&language=%s&include_image_language=%s,null&include_video_language=%s,en,null",
-		id, url.QueryEscape(lang), url.QueryEscape(lang), url.QueryEscape(lang))
+	path := fmt.Sprintf("/movie/%d?append_to_response=credits,external_ids,images,keywords,release_dates,alternative_titles,videos&language=%s&include_image_language=%s&include_video_language=%s,en,null",
+		id, url.QueryEscape(lang), url.QueryEscape(tmdbImageLanguages(lang)), url.QueryEscape(lang))
 	var movie MovieDetail
 	if err := c.doGet(ctx, path, &movie); err != nil {
 		return nil, err
@@ -539,10 +541,11 @@ func (c *Client) GetMovie(ctx context.Context, id int, lang string) (*MovieDetai
 }
 
 // GetTV fetches full TV show details with credits, external IDs, images,
-// keywords, content ratings, and videos appended.
+// keywords, content ratings, and videos appended. Images use the same
+// language fallback as GetMovie.
 func (c *Client) GetTV(ctx context.Context, id int, lang string) (*TVDetail, error) {
-	path := fmt.Sprintf("/tv/%d?append_to_response=credits,external_ids,images,keywords,content_ratings,alternative_titles,videos&language=%s&include_image_language=%s,null&include_video_language=%s,en,null",
-		id, url.QueryEscape(lang), url.QueryEscape(lang), url.QueryEscape(lang))
+	path := fmt.Sprintf("/tv/%d?append_to_response=credits,external_ids,images,keywords,content_ratings,alternative_titles,videos&language=%s&include_image_language=%s&include_video_language=%s,en,null",
+		id, url.QueryEscape(lang), url.QueryEscape(tmdbImageLanguages(lang)), url.QueryEscape(lang))
 	var tv TVDetail
 	if err := c.doGet(ctx, path, &tv); err != nil {
 		return nil, err
